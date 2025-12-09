@@ -9,7 +9,7 @@ bot = telebot.TeleBot(TOKEN)
 # Пока оставим пустым, я объясню ниже, как заполнить.
 files = {
     '1': 'BQACAgIAAxkBAAMEaThuxZMmVsuaD0kuDDLlTzLH4ecAAn2XAAJNsMFJD6AugwWfI0w2BA', 
-    'capcut': 'BQACAgIAAxkBAA...',    # Пример ID
+    '2': 'BQACAgIAAxkBAAMyaTiW3Mwvg5PMyKXUb6yAykf56YEAAiGZAAJNsMFJpz2Bdlh9_EQ2BA',    # Пример ID
 }
 
 @bot.message_handler(commands=['start'])
@@ -52,4 +52,5 @@ def get_file_id(message):
     bot.send_message(message.chat.id, f"ID этого файла:\n`{file_id}`", parse_mode='Markdown')
 
 # Запуск бота (чтобы он не выключался)
+
 bot.infinity_polling()
