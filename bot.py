@@ -1,70 +1,150 @@
 import telebot
 import os
+import sqlite3
 from dotenv import load_dotenv
 
-# Загружаем секретные переменные из файла .env
+# Загружаем переменные и токен
 load_dotenv()
-
-# Берем токен из переменных окружения
 TOKEN = os.getenv('BOT_TOKEN')
 
-# Проверка, что токен нашелся (чтобы не гадать, если бот не запустится)
+# --- НАСТРОЙКИ АДМИНА ---
+# Впиши сюда свой ID (числовой), чтобы только ты мог добавлять файлы.
+# Узнать ID можно у бота @getmyid_bot
+ADMIN_ID = 1014329713  # <--- ЗАМЕНИ ЭТО НА СВОЙ ЦИФРОВОЙ ID
+
 if not TOKEN:
     print("Ошибка: Токен не найден! Проверь файл .env")
     exit()
 
 bot = telebot.TeleBot(TOKEN)
 
+# --- РАБОТА С БАЗОЙ ДАННЫХ ---
+def init_db():
+    """Создает таблицу, если её нет"""
+    conn = sqlite3.connect('bot_database.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS files (
+            code TEXT PRIMARY KEY,
+            file_id TEXT,
+            file_type TEXT,
+            caption TEXT
+        )
+    ''')
+    conn.commit()
+    conn.close()
 
-# Это наша "база данных".
-# Слева - кодовое слово для ссылки, Справа - file_id файла в Телеграм.
-# Пока оставим пустым, я объясню ниже, как заполнить.
-files = {
-    '1': 'BQACAgIAAxkBAAMEaThuxZMmVsuaD0kuDDLlTzLH4ecAAn2XAAJNsMFJD6AugwWfI0w2BA', 
-    '2': 'BQACAgIAAxkBAAMyaTiW3Mwvg5PMyKXUb6yAykf56YEAAiGZAAJNsMFJpz2Bdlh9_EQ2BA',    # Пример ID
-}
+def add_file_to_db(code, file_id, file_type, caption):
+    """Добавляет файл в БД"""
+    try:
+        conn = sqlite3.connect('bot_database.db')
+        cursor = conn.cursor()
+        cursor.execute('INSERT OR REPLACE INTO files VALUES (?, ?, ?, ?)', 
+                       (code, file_id, file_type, caption))
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        print(f"Ошибка БД: {e}")
+        return False
+
+def get_file_from_db(code):
+    """Достает файл по коду"""
+    conn = sqlite3.connect('bot_database.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT file_id, file_type, caption FROM files WHERE code = ?', (code,))
+    result = cursor.fetchone()
+    conn.close()
+    return result
+
+# Инициализируем БД при запуске
+init_db()
+
+# --- КОМАНДЫ БОТА ---
 
 @bot.message_handler(commands=['start'])
 def start_message(message):
-    # Получаем текст, который идет после /start
-    # Например, если ссылка t.me/bot?start=minecraft, то args будет 'minecraft'
     args = message.text.split()
     
+    # Если есть аргумент (код файла)
     if len(args) > 1:
-        # Если есть аргумент (код файла)
         code = args[1]
+        data = get_file_from_db(code)
         
-        if code in files:
-            # Если такой код есть в нашем списке, отправляем файл
-            file_to_send = files[code]
+        if data:
+            file_id, file_type, caption = data
             try:
-                # Отправляем документ. Если это фото/видео, команда будет другой.
-                bot.send_document(message.chat.id, file_to_send, caption="🗂 Держи свой файл!\nНе забудь поставить реакцию\nна канал 💙\n@AppVault7")
+                # Отправляем файл в зависимости от типа
+                if file_type == 'document':
+                    bot.send_document(message.chat.id, file_id, caption=caption)
+                elif file_type == 'video':
+                    bot.send_video(message.chat.id, file_id, caption=caption)
+                elif file_type == 'photo':
+                    bot.send_photo(message.chat.id, file_id, caption=caption)
+                elif file_type == 'audio':
+                    bot.send_audio(message.chat.id, file_id, caption=caption)
             except Exception as e:
                 bot.send_message(message.chat.id, "Ой, что-то пошло не так при отправке файла.")
+                print(e)
         else:
             bot.send_message(message.chat.id, "Файл не найден. Проверьте ссылку.")
     else:
-        # Если человек просто нажал /start без ссылки
-        bot.send_message(message.chat.id, 'Привет! Я бот для скачивания файлов. Переходи по ссылкам из канала <a href="https://t.me/AppVault7">AppVault</a>.',parse_mode='HTML' )
+        # Приветствие
+        bot.send_message(message.chat.id, 
+                         'Привет! Я бот для скачивания файлов. Переходи по ссылкам из канала <a href="https://t.me/AppVault7">AppVault</a>.', parse_mode='HTML')
 
-# Маленькая хитрость: этот кусок кода поможет вам узнать file_id
-# Просто перешлите боту любой файл, и он пришлет вам его ID в ответ.
-@bot.message_handler(content_types=['document', 'video', 'audio', 'photo'])
-def get_file_id(message):
-    # Проверяем тип файла и берем нужный ID
-    if message.document:
-        file_id = message.document.file_id
-    elif message.video:
-        file_id = message.video.file_id
-    elif message.photo:
-        # У фото несколько размеров, берем самый большой (-1)
-        file_id = message.photo[-1].file_id
-        
-    bot.send_message(message.chat.id, f"ID этого файла:\n`{file_id}`", parse_mode='Markdown')
+# --- АДМИНКА (ДОБАВЛЕНИЕ ФАЙЛОВ) ---
+# Как пользоваться:
+# 1. Отправь боту файл (видео, документ, фото).
+# 2. Ответь (Reply) на этот файл командой: /save слово
+# Пример: /save minecraft
 
-# Запуск бота (чтобы он не выключался)
+@bot.message_handler(commands=['save'])
+def save_file_command(message):
+    # Проверка на админа
+    if message.from_user.id != ADMIN_ID:
+        return # Игнорируем чужаков
 
+    # Проверяем, что команда написана в ответ на сообщение с файлом
+    if not message.reply_to_message:
+        bot.reply_to(message, "ℹ️ Отправь мне файл, а потом сделай **Reply** (ответить) на него с командой `/save код`", parse_mode='Markdown')
+        return
+
+    args = message.text.split()
+    if len(args) < 2:
+        bot.reply_to(message, "⚠️ Укажи код для сохранения. Пример: `/save minecraft`", parse_mode='Markdown')
+        return
+
+    code = args[1].lower() # Код ссылки (например, minecraft)
+    target_msg = message.reply_to_message
+    
+    file_id = None
+    file_type = None
+
+    # Определяем тип файла
+    if target_msg.document:
+        file_id = target_msg.document.file_id
+        file_type = 'document'
+    elif target_msg.video:
+        file_id = target_msg.video.file_id
+        file_type = 'video'
+    elif target_msg.photo:
+        file_id = target_msg.photo[-1].file_id # Берем лучшее качество
+        file_type = 'photo'
+    elif target_msg.audio:
+        file_id = target_msg.audio.file_id
+        file_type = 'audio'
+    
+    if file_id:
+        # Стандартная подпись
+        caption = "🗂 Держи свой файл!\nНе забудь поставить реакцию\nна канал 💙\n@AppVault7"
+        if add_file_to_db(code, file_id, file_type, caption):
+            link = f"https://t.me/{bot.get_me().username}?start={code}"
+            bot.reply_to(message, f"✅ Файл сохранен!\nКод: `{code}`\nСсылка: {link}", parse_mode='Markdown')
+        else:
+            bot.reply_to(message, "❌ Ошибка записи в базу данных.")
+    else:
+        bot.reply_to(message, "⚠️ Я не вижу файла в сообщении, на которое ты ответил.")
+
+# Чтобы бот не падал
 bot.infinity_polling()
-
-
