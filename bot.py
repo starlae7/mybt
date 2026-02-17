@@ -1,7 +1,7 @@
 import telebot
 
 # ВСТАВЬТЕ СЮДА ВАШ ТОКЕН ОТ BOTFATHER
-TOKEN = '8305187664:AAF_auRIg_dsIHsobOHn7skXtDL3Jz1H2Pw'
+TOKEN = '8305187664:AAEFr22uqyFxodm5Uj36kTWZlU-689m3FSw'
 bot = telebot.TeleBot(TOKEN)
 
 # Это наша "база данных".
@@ -54,3 +54,4 @@ def get_file_id(message):
 # Запуск бота (чтобы он не выключался)
 
 bot.infinity_polling()
+
