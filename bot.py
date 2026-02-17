@@ -1,8 +1,20 @@
 import telebot
+import os
+from dotenv import load_dotenv
 
-# ВСТАВЬТЕ СЮДА ВАШ ТОКЕН ОТ BOTFATHER
-TOKEN = '8305187664:AAEFr22uqyFxodm5Uj36kTWZlU-689m3FSw'
+# Загружаем секретные переменные из файла .env
+load_dotenv()
+
+# Берем токен из переменных окружения
+TOKEN = os.getenv('BOT_TOKEN')
+
+# Проверка, что токен нашелся (чтобы не гадать, если бот не запустится)
+if not TOKEN:
+    print("Ошибка: Токен не найден! Проверь файл .env")
+    exit()
+
 bot = telebot.TeleBot(TOKEN)
+
 
 # Это наша "база данных".
 # Слева - кодовое слово для ссылки, Справа - file_id файла в Телеграм.
@@ -54,4 +66,5 @@ def get_file_id(message):
 # Запуск бота (чтобы он не выключался)
 
 bot.infinity_polling()
+
 
