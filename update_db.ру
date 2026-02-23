@@ -1,0 +1,31 @@
+import sqlite3
+
+def update_database():
+    print("⏳ Обновляю структуру базы данных...")
+    conn = sqlite3.connect('bot_database.db')
+    cursor = conn.cursor()
+
+    # 1. Создаем таблицу пользователей (если её нет)
+    # Она будет хранить ID пользователя и дату первого захода
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            user_id INTEGER PRIMARY KEY,
+            join_date TEXT
+        )
+    ''')
+    print("✅ Таблица users проверена/создана.")
+
+    # 2. Добавляем колонку 'downloads' в таблицу файлов
+    # Используем try, так как если колонка уже есть, будет ошибка (мы её проигнорируем)
+    try:
+        cursor.execute('ALTER TABLE files ADD COLUMN downloads INTEGER DEFAULT 0')
+        print("✅ Колонка 'downloads' добавлена в таблицу files.")
+    except sqlite3.OperationalError:
+        print("ℹ️ Колонка 'downloads' уже существует.")
+
+    conn.commit()
+    conn.close()
+    print("🎉 База данных успешно обновлена! Можно запускать бота.")
+
+if __name__ == '__main__':
+    update_database()
