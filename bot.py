@@ -197,6 +197,25 @@ def delete_command(message):
     else:
         bot.reply_to(message, "❌ Файл не найден.")
 
+# 🔥 ВРЕМЕННАЯ ФУНКЦИЯ ДЛЯ ВОССТАНОВЛЕНИЯ БАЗЫ
+@bot.message_handler(content_types=['document'])
+def restore_database(message):
+    if message.from_user.id != ADMIN_ID: 
+        return
+        
+    if message.document.file_name == 'bot_database.db':
+        bot.reply_to(message, "⏳ Загружаю старую базу данных на сервер...")
+        try:
+            file_info = bot.get_file(message.document.file_id)
+            downloaded_file = bot.download_file(file_info.file_path)
+            
+            with open('bot_database.db', 'wb') as new_file:
+                new_file.write(downloaded_file)
+                
+            bot.reply_to(message, "✅ База данных успешно восстановлена! Старые данные подгружены.")
+        except Exception as e:
+            bot.reply_to(message, f"❌ Ошибка при загрузке: {e}")
+
 # 🔥 НОВОЕ: Команда статистики
 # 🔥 ОБНОВЛЕНО: Команда расширенной статистики
 
