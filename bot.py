@@ -1,15 +1,12 @@
 import telebot
 import os
 import sqlite3
+from datetime import datetime # 🔥 НОВОЕ: Для работы с датами
 from dotenv import load_dotenv
 
-# Загружаем переменные
 load_dotenv()
 TOKEN = os.getenv('BOT_TOKEN')
-
-# --- НАСТРОЙКИ АДМИНА ---
-# Вставь сюда свой ID
-ADMIN_ID = 000000000 
+ADMIN_ID = 1014329713 # <--- НЕ ЗАБУДЬ ВСТАВИТЬ СВОЙ ID
 
 if not TOKEN:
     print("Ошибка: Токен не найден! Проверь файл .env")
@@ -19,6 +16,7 @@ bot = telebot.TeleBot(TOKEN)
 
 # --- РАБОТА С БАЗОЙ ДАННЫХ ---
 def init_db():
+    # Эта функция теперь просто для страховки, основную работу мы сделали скриптом
     conn = sqlite3.connect('bot_database.db')
     cursor = conn.cursor()
     cursor.execute('''
@@ -26,17 +24,71 @@ def init_db():
             code TEXT PRIMARY KEY,
             file_id TEXT,
             file_type TEXT,
-            caption TEXT
+            caption TEXT,
+            downloads INTEGER DEFAULT 0
+        )
+    ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            user_id INTEGER PRIMARY KEY,
+            join_date TEXT
         )
     ''')
     conn.commit()
     conn.close()
 
+# 🔥 НОВОЕ: Функция регистрации пользователя
+# 🔥 ОБНОВЛЕНО: Функция регистрации и активности пользователя
+
+def log_user(user_id):
+
+    conn = sqlite3.connect('bot_database.db')
+
+    cursor = conn.cursor()
+
+    date_now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    
+
+    # Ищем пользователя в базе
+
+    cursor.execute('SELECT user_id FROM users WHERE user_id = ?', (user_id,))
+
+    if cursor.fetchone() is None:
+
+        # Если его нет -> записываем дату регистрации и активности
+
+        cursor.execute('INSERT INTO users (user_id, join_date, last_active) VALUES (?, ?, ?)', (user_id, date_now, date_now))
+
+    else:
+
+        # Если он уже есть -> обновляем только дату последней активности
+
+        cursor.execute('UPDATE users SET last_active = ? WHERE user_id = ?', (date_now, user_id))
+
+        
+
+    conn.commit()
+
+    conn.close()
+
+
+
+# 🔥 НОВОЕ: Функция счетчика скачиваний
+def increment_download(code):
+    conn = sqlite3.connect('bot_database.db')
+    cursor = conn.cursor()
+    cursor.execute('UPDATE files SET downloads = downloads + 1 WHERE code = ?', (code,))
+    conn.commit()
+    conn.close()
+
+
 def add_file_to_db(code, file_id, file_type, caption):
     try:
         conn = sqlite3.connect('bot_database.db')
         cursor = conn.cursor()
-        cursor.execute('INSERT OR REPLACE INTO files VALUES (?, ?, ?, ?)', 
+        # При добавлении нового файла downloads = 0
+        cursor.execute('INSERT OR REPLACE INTO files (code, file_id, file_type, caption, downloads) VALUES (?, ?, ?, ?, 0)', 
                        (code, file_id, file_type, caption))
         conn.commit()
         conn.close()
@@ -54,7 +106,6 @@ def get_file_from_db(code):
     return result
 
 def delete_file_from_db(code):
-    """Удаляет конкретный файл по коду"""
     conn = sqlite3.connect('bot_database.db')
     cursor = conn.cursor()
     cursor.execute('DELETE FROM files WHERE code = ?', (code,))
@@ -63,42 +114,15 @@ def delete_file_from_db(code):
     conn.close()
     return deleted_count > 0
 
-def get_all_files_list():
-    """Возвращает список всех кодов файлов"""
-    conn = sqlite3.connect('bot_database.db')
-    cursor = conn.cursor()
-    # rowid - это скрытый номер строки, он показывает порядок добавления
-    cursor.execute('SELECT code FROM files ORDER BY rowid DESC') 
-    result = cursor.fetchall()
-    conn.close()
-    return result
-
-def delete_oldest_files_db(limit=5):
-    """Удаляет N самых старых файлов"""
-    conn = sqlite3.connect('bot_database.db')
-    cursor = conn.cursor()
-    
-    # Сначала узнаем, КОГО мы удалим (чтобы показать админу)
-    cursor.execute(f'SELECT code FROM files ORDER BY rowid ASC LIMIT ?', (limit,))
-    files_to_delete = cursor.fetchall()
-    
-    deleted_codes = []
-    for row in files_to_delete:
-        code = row[0]
-        cursor.execute('DELETE FROM files WHERE code = ?', (code,))
-        deleted_codes.append(code)
-        
-    conn.commit()
-    conn.close()
-    return deleted_codes
-
-# Инициализируем БД
 init_db()
 
 # --- КОМАНДЫ ПОЛЬЗОВАТЕЛЯ ---
 
 @bot.message_handler(commands=['start'])
 def start_message(message):
+    # 🔥 НОВОЕ: Записываем пользователя, как только он нажал старт
+    log_user(message.from_user.id)
+    
     args = message.text.split()
     if len(args) > 1:
         code = args[1]
@@ -115,6 +139,10 @@ def start_message(message):
                     bot.send_photo(message.chat.id, file_id, caption=caption)
                 elif file_type == 'audio':
                     bot.send_audio(message.chat.id, file_id, caption=caption)
+                
+                # 🔥 НОВОЕ: Если файл отправился успешно, увеличиваем счетчик
+                increment_download(code)
+                
             except Exception as e:
                 bot.send_message(message.chat.id, "Ой, что-то пошло не так при отправке файла.")
                 print(e)
@@ -128,7 +156,6 @@ def start_message(message):
 @bot.message_handler(commands=['save'])
 def save_file_command(message):
     if message.from_user.id != ADMIN_ID: return
-
     if not message.reply_to_message:
         bot.reply_to(message, "⚠️ Сделай Reply на файл и напиши `/save код`", parse_mode='Markdown')
         return
@@ -141,17 +168,12 @@ def save_file_command(message):
     code = args[1].lower()
     target_msg = message.reply_to_message
     
-    file_id = None
-    file_type = None
+    file_id = None; file_type = None
 
-    if target_msg.document:
-        file_id = target_msg.document.file_id; file_type = 'document'
-    elif target_msg.video:
-        file_id = target_msg.video.file_id; file_type = 'video'
-    elif target_msg.photo:
-        file_id = target_msg.photo[-1].file_id; file_type = 'photo'
-    elif target_msg.audio:
-        file_id = target_msg.audio.file_id; file_type = 'audio'
+    if target_msg.document: file_id = target_msg.document.file_id; file_type = 'document'
+    elif target_msg.video: file_id = target_msg.video.file_id; file_type = 'video'
+    elif target_msg.photo: file_id = target_msg.photo[-1].file_id; file_type = 'photo'
+    elif target_msg.audio: file_id = target_msg.audio.file_id; file_type = 'audio'
     
     if file_id:
         caption = "🗂 Держи свой файл!\nНе забудь поставить реакцию на канал 💙\n@AppVault7"
@@ -161,58 +183,124 @@ def save_file_command(message):
         else:
             bot.reply_to(message, "❌ Ошибка БД.")
     else:
-        bot.reply_to(message, "⚠️ Файл не найден в сообщении.")
+        bot.reply_to(message, "⚠️ Файл не найден.")
 
-# НОВОЕ: Удаление конкретного файла
 @bot.message_handler(commands=['delete'])
 def delete_command(message):
     if message.from_user.id != ADMIN_ID: return
-    
     args = message.text.split()
     if len(args) < 2:
-        bot.reply_to(message, "⚠️ Укажи код для удаления. Пример: `/delete minecraft`", parse_mode='Markdown')
-        return
-        
+        bot.reply_to(message, "⚠️ Укажи код.", parse_mode='Markdown'); return
     code = args[1]
     if delete_file_from_db(code):
-        bot.reply_to(message, f"🗑 Файл `{code}` успешно удален!", parse_mode='Markdown')
+        bot.reply_to(message, f"🗑 Файл `{code}` удален!", parse_mode='Markdown')
     else:
-        bot.reply_to(message, f"❌ Файл с кодом `{code}` не найден.", parse_mode='Markdown')
+        bot.reply_to(message, "❌ Файл не найден.")
 
-# НОВОЕ: Список всех файлов
-@bot.message_handler(commands=['all'])
-def all_files_command(message):
+# 🔥 НОВОЕ: Команда статистики
+# 🔥 ОБНОВЛЕНО: Команда расширенной статистики
+
+@bot.message_handler(commands=['stats'])
+
+def stats_command(message):
+
     if message.from_user.id != ADMIN_ID: return
+
     
-    files = get_all_files_list()
-    if not files:
-        bot.reply_to(message, "📂 База данных пуста.")
-        return
-        
-    # Собираем список в красивое сообщение
-    text = "📂 **Список файлов (от новых к старым):**\n\n"
-    for row in files:
-        text += f"🔹 `{row[0]}`\n"
-        
+
+    conn = sqlite3.connect('bot_database.db')
+
+    cursor = conn.cursor()
+
+    
+
+    # Получаем текущие даты для сортировки
+
+    today = datetime.now().strftime("%Y-%m-%d")    # Например: 2023-11-20
+
+    this_month = datetime.now().strftime("%Y-%m")  # Например: 2023-11
+
+    
+
+    # 1. Всего юзеров
+
+    cursor.execute('SELECT COUNT(*) FROM users')
+
+    total_users = cursor.fetchone()[0]
+
+    
+
+    # 2. Приход за сегодня (дата регистрации = сегодня)
+
+    cursor.execute(f"SELECT COUNT(*) FROM users WHERE join_date LIKE '{today}%'")
+
+    new_today = cursor.fetchone()[0]
+
+    
+
+    # 3. DAU: Активные сегодня (последняя активность = сегодня)
+
+    cursor.execute(f"SELECT COUNT(*) FROM users WHERE last_active LIKE '{today}%'")
+
+    dau = cursor.fetchone()[0]
+
+    
+
+    # 4. MAU: Активные за месяц (последняя активность = этот месяц)
+
+    cursor.execute(f"SELECT COUNT(*) FROM users WHERE last_active LIKE '{this_month}%'")
+
+    mau = cursor.fetchone()[0]
+
+    
+
+    # 5. ТОП-10 скачиваний
+
+    cursor.execute('SELECT code, downloads FROM files ORDER BY downloads DESC LIMIT 10')
+
+    top_files = cursor.fetchall()
+
+    
+
+    conn.close()
+
+    
+
+    # Собираем красивое сообщение
+
+    text = f"📊 **Подробная статистика:**\n\n"
+
+    text += f"👥 Всего пользователей: `{total_users}`\n"
+
+    text += f"📈 Новых за сегодня: `{new_today}`\n"
+
+    text += f"🔥 Активных сегодня (DAU): `{dau}`\n"
+
+    text += f"📅 Активных в этом месяце (MAU): `{mau}`\n"
+
+    text += f"➖➖➖➖➖➖➖\n"
+
+    text += f"🏆 **Топ-10 скачиваний:**\n"
+
+    
+
+    if not top_files:
+
+        text += "Пока ничего не скачивали."
+
+    else:
+
+        for i, (code, count) in enumerate(top_files, 1):
+
+            text += f"{i}. `{code}` — {count} раз\n"
+
+            
+
     bot.send_message(message.chat.id, text, parse_mode='Markdown')
 
-# НОВОЕ: Очистка старых файлов (то, что ты просил)
-@bot.message_handler(commands=['cleanup'])
-def cleanup_command(message):
-    if message.from_user.id != ADMIN_ID: return
+
     
-    # По умолчанию удаляем 5, но можно написать /cleanup 10
-    args = message.text.split()
-    limit = 5
-    if len(args) > 1 and args[1].isdigit():
-        limit = int(args[1])
-        
-    deleted = delete_oldest_files_db(limit)
     
-    if deleted:
-        text = f"🧹 **Удалено старых файлов: {len(deleted)}**\n\nСписок удаленных кодов:\n" + ", ".join(deleted)
-        bot.reply_to(message, text)
-    else:
-        bot.reply_to(message, "🤷‍♂️ База пуста или файлов не найдено.")
 
 bot.infinity_polling()
+
