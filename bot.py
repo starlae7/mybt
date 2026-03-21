@@ -23,7 +23,7 @@ bot = telebot.TeleBot(TOKEN)
 # --- РАБОТА С БАЗОЙ ДАННЫХ ---
 def init_db():
     # Эта функция теперь просто для страховки, основную работу мы сделали скриптом
-    conn = sqlite3.connect('bot_database.db')
+    conn = sqlite3.connect('prod_database.db')
     cursor = conn.cursor()
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS files (
@@ -48,7 +48,7 @@ def init_db():
 
 def log_user(user_id):
 
-    conn = sqlite3.connect('bot_database.db')
+    conn = sqlite3.connect('prod_database.db')
 
     cursor = conn.cursor()
 
@@ -82,7 +82,7 @@ def log_user(user_id):
 
 # 🔥 НОВОЕ: Функция счетчика скачиваний
 def increment_download(code):
-    conn = sqlite3.connect('bot_database.db')
+    conn = sqlite3.connect('prod_database.db')
     cursor = conn.cursor()
     cursor.execute('UPDATE files SET downloads = downloads + 1 WHERE code = ?', (code,))
     conn.commit()
@@ -91,7 +91,7 @@ def increment_download(code):
 
 def add_file_to_db(code, file_id, file_type, caption):
     try:
-        conn = sqlite3.connect('bot_database.db')
+        conn = sqlite3.connect('prod_database.db')
         cursor = conn.cursor()
         # При добавлении нового файла downloads = 0
         cursor.execute('INSERT OR REPLACE INTO files (code, file_id, file_type, caption, downloads) VALUES (?, ?, ?, ?, 0)', 
@@ -104,7 +104,7 @@ def add_file_to_db(code, file_id, file_type, caption):
         return False
 
 def get_file_from_db(code):
-    conn = sqlite3.connect('bot_database.db')
+    conn = sqlite3.connect('prod_database.db')
     cursor = conn.cursor()
     cursor.execute('SELECT file_id, file_type, caption FROM files WHERE code = ?', (code,))
     result = cursor.fetchone()
@@ -112,7 +112,7 @@ def get_file_from_db(code):
     return result
 
 def delete_file_from_db(code):
-    conn = sqlite3.connect('bot_database.db')
+    conn = sqlite3.connect('prod_database.db')
     cursor = conn.cursor()
     cursor.execute('DELETE FROM files WHERE code = ?', (code,))
     deleted_count = cursor.rowcount
@@ -209,13 +209,13 @@ def restore_database(message):
     if message.from_user.id != ADMIN_ID: 
         return
         
-    if message.document.file_name == 'bot_database.db':
+    if message.document.file_name == 'prod_database.db':
         bot.reply_to(message, "⏳ Загружаю старую базу данных на сервер...")
         try:
             file_info = bot.get_file(message.document.file_id)
             downloaded_file = bot.download_file(file_info.file_path)
             
-            with open('bot_database.db', 'wb') as new_file:
+            with open('prod_database.db', 'wb') as new_file:
                 new_file.write(downloaded_file)
                 
             bot.reply_to(message, "✅ База данных успешно восстановлена! Старые данные подгружены.")
@@ -233,7 +233,7 @@ def stats_command(message):
 
     
 
-    conn = sqlite3.connect('bot_database.db')
+    conn = sqlite3.connect('prod_database.db')
 
     cursor = conn.cursor()
 
