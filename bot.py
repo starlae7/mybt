@@ -1,6 +1,12 @@
 import telebot
 import os
 import sqlite3
+import shutil
+
+# Копируем базу из GitHub-бэкапа только при самом первом запуске
+if not os.path.exists('prod_database.db') and os.path.exists('source.db'):
+    shutil.copy('source.db', 'prod_database.db')
+    print("✅ База данных успешно восстановлена из бэкапа!")
 from datetime import datetime # 🔥 НОВОЕ: Для работы с датами
 from dotenv import load_dotenv
 
