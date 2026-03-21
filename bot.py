@@ -2,17 +2,21 @@ import telebot
 import os
 import sqlite3
 import shutil
+import time
+import threading
+import uuid
+from datetime import datetime
+from dotenv import load_dotenv
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 # Копируем базу из GitHub-бэкапа только при самом первом запуске
 if not os.path.exists('prod_database.db') and os.path.exists('source.db'):
     shutil.copy('source.db', 'prod_database.db')
     print("✅ База данных успешно восстановлена из бэкапа!")
-from datetime import datetime # 🔥 НОВОЕ: Для работы с датами
-from dotenv import load_dotenv
 
 load_dotenv()
 TOKEN = os.getenv('BOT_TOKEN')
-ADMIN_ID = 1014329713 # <--- НЕ ЗАБУДЬ ВСТАВИТЬ СВОЙ ID
+ADMIN_ID = 1014329713 # <--- ТВОЙ ID
 
 if not TOKEN:
     print("Ошибка: Токен не найден! Проверь файл .env")
@@ -20,9 +24,11 @@ if not TOKEN:
 
 bot = telebot.TeleBot(TOKEN)
 
+# Временное хранилище для состояний рассылки
+broadcast_data = {}
+
 # --- РАБОТА С БАЗОЙ ДАННЫХ ---
 def init_db():
-    # Эта функция теперь просто для страховки, основную работу мы сделали скриптом
     conn = sqlite3.connect('prod_database.db')
     cursor = conn.cursor()
     cursor.execute('''
@@ -37,50 +43,33 @@ def init_db():
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY,
-            join_date TEXT
+            join_date TEXT,
+            last_active TEXT
+        )
+    ''')
+    # 🔥 НОВОЕ: Таблица для хранения логов рассылки (чтобы потом удалять)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS broadcast_logs (
+            broadcast_id TEXT,
+            user_id INTEGER,
+            message_id INTEGER
         )
     ''')
     conn.commit()
     conn.close()
 
-# 🔥 НОВОЕ: Функция регистрации пользователя
-# 🔥 ОБНОВЛЕНО: Функция регистрации и активности пользователя
-
 def log_user(user_id):
-
     conn = sqlite3.connect('prod_database.db')
-
     cursor = conn.cursor()
-
     date_now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-    
-
-    # Ищем пользователя в базе
-
     cursor.execute('SELECT user_id FROM users WHERE user_id = ?', (user_id,))
-
     if cursor.fetchone() is None:
-
-        # Если его нет -> записываем дату регистрации и активности
-
         cursor.execute('INSERT INTO users (user_id, join_date, last_active) VALUES (?, ?, ?)', (user_id, date_now, date_now))
-
     else:
-
-        # Если он уже есть -> обновляем только дату последней активности
-
         cursor.execute('UPDATE users SET last_active = ? WHERE user_id = ?', (date_now, user_id))
-
-        
-
     conn.commit()
-
     conn.close()
 
-
-
-# 🔥 НОВОЕ: Функция счетчика скачиваний
 def increment_download(code):
     conn = sqlite3.connect('prod_database.db')
     cursor = conn.cursor()
@@ -88,12 +77,10 @@ def increment_download(code):
     conn.commit()
     conn.close()
 
-
 def add_file_to_db(code, file_id, file_type, caption):
     try:
         conn = sqlite3.connect('prod_database.db')
         cursor = conn.cursor()
-        # При добавлении нового файла downloads = 0
         cursor.execute('INSERT OR REPLACE INTO files (code, file_id, file_type, caption, downloads) VALUES (?, ?, ?, ?, 0)', 
                        (code, file_id, file_type, caption))
         conn.commit()
@@ -126,32 +113,21 @@ init_db()
 
 @bot.message_handler(commands=['start'])
 def start_message(message):
-    # 🔥 НОВОЕ: Записываем пользователя, как только он нажал старт
     log_user(message.from_user.id)
-    
     args = message.text.split()
     if len(args) > 1:
         code = args[1]
         data = get_file_from_db(code)
-        
         if data:
             file_id, file_type, caption = data
             try:
-                if file_type == 'document':
-                    bot.send_document(message.chat.id, file_id, caption=caption)
-                elif file_type == 'video':
-                    bot.send_video(message.chat.id, file_id, caption=caption)
-                elif file_type == 'photo':
-                    bot.send_photo(message.chat.id, file_id, caption=caption)
-                elif file_type == 'audio':
-                    bot.send_audio(message.chat.id, file_id, caption=caption)
-                
-                # 🔥 НОВОЕ: Если файл отправился успешно, увеличиваем счетчик
+                if file_type == 'document': bot.send_document(message.chat.id, file_id, caption=caption)
+                elif file_type == 'video': bot.send_video(message.chat.id, file_id, caption=caption)
+                elif file_type == 'photo': bot.send_photo(message.chat.id, file_id, caption=caption)
+                elif file_type == 'audio': bot.send_audio(message.chat.id, file_id, caption=caption)
                 increment_download(code)
-                
             except Exception as e:
                 bot.send_message(message.chat.id, "Ой, что-то пошло не так при отправке файла.")
-                print(e)
         else:
             bot.send_message(message.chat.id, "Файл не найден. Проверьте ссылку.")
     else:
@@ -173,7 +149,6 @@ def save_file_command(message):
 
     code = args[1].lower()
     target_msg = message.reply_to_message
-    
     file_id = None; file_type = None
 
     if target_msg.document: file_id = target_msg.document.file_id; file_type = 'document'
@@ -203,6 +178,143 @@ def delete_command(message):
     else:
         bot.reply_to(message, "❌ Файл не найден.")
 
+
+# 🔥 НОВЫЙ БЛОК: РАССЫЛКА И УДАЛЕНИЕ СООБЩЕНИЙ 🔥
+
+@bot.message_handler(commands=['broadcast'])
+def cmd_broadcast(message):
+    if message.from_user.id != ADMIN_ID: return
+    msg = bot.send_message(message.chat.id, "Отправь мне сообщение для рассылки (текст, фото, видео - что угодно). \nЯ скопирую его со всеми форматированиями.")
+    bot.register_next_step_handler(msg, process_broadcast_preview)
+
+def process_broadcast_preview(message):
+    # Показываем админу, как будет выглядеть сообщение
+    bot.send_message(message.chat.id, "👀 **Предпросмотр сообщения:**", parse_mode='Markdown')
+    bot.copy_message(message.chat.id, message.chat.id, message.message_id)
+    
+    # Сохраняем ID сообщения для дальнейшего копирования
+    broadcast_data[message.from_user.id] = {'message_id': message.message_id}
+    
+    # Создаем клавиатуру
+    markup = InlineKeyboardMarkup()
+    markup.add(InlineKeyboardButton("✅ Отправить всем", callback_data="bc_all"))
+    markup.add(InlineKeyboardButton("🔢 Выбрать количество", callback_data="bc_limit"))
+    markup.add(InlineKeyboardButton("❌ Отмена", callback_data="bc_cancel"))
+    
+    bot.send_message(message.chat.id, "Что делаем дальше?", reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('bc_'))
+def broadcast_callback(call):
+    admin_id = call.from_user.id
+    if admin_id != ADMIN_ID: return
+    
+    bot.answer_callback_query(call.id)
+    
+    if call.data == "bc_cancel":
+        bot.edit_message_text("❌ Рассылка отменена.", call.message.chat.id, call.message.message_id)
+        broadcast_data.pop(admin_id, None)
+        
+    elif call.data == "bc_all":
+        bot.edit_message_text("🚀 Начинаю рассылку всем пользователям...", call.message.chat.id, call.message.message_id)
+        # Запускаем рассылку в фоновом потоке
+        threading.Thread(target=run_broadcast, args=(admin_id, broadcast_data[admin_id]['message_id'], None)).start()
+        
+    elif call.data == "bc_limit":
+        msg = bot.edit_message_text("Напиши число пользователей, которым нужно отправить сообщение:", call.message.chat.id, call.message.message_id)
+        bot.register_next_step_handler(msg, process_broadcast_limit)
+
+def process_broadcast_limit(message):
+    if not message.text.isdigit():
+        bot.send_message(message.chat.id, "❌ Это не число. Рассылка отменена.")
+        return
+    limit = int(message.text)
+    bot.send_message(message.chat.id, f"🚀 Начинаю рассылку для {limit} пользователей...")
+    threading.Thread(target=run_broadcast, args=(message.from_user.id, broadcast_data[message.from_user.id]['message_id'], limit)).start()
+
+def run_broadcast(admin_id, message_id_to_copy, limit):
+    conn = sqlite3.connect('prod_database.db')
+    cursor = conn.cursor()
+    
+    # Берем пользователей
+    if limit:
+        cursor.execute('SELECT user_id FROM users LIMIT ?', (limit,))
+    else:
+        cursor.execute('SELECT user_id FROM users')
+        
+    users = cursor.fetchall()
+    broadcast_id = str(uuid.uuid4())[:8] # Генерируем короткий уникальный ID рассылки
+    
+    success = 0
+    blocked = 0
+    
+    for user in users:
+        user_id = user[0]
+        try:
+            # Копируем сообщение
+            sent_msg = bot.copy_message(user_id, admin_id, message_id_to_copy)
+            # Записываем ID отправленного сообщения в базу
+            cursor.execute('INSERT INTO broadcast_logs (broadcast_id, user_id, message_id) VALUES (?, ?, ?)', 
+                           (broadcast_id, user_id, sent_msg.message_id))
+            success += 1
+        except Exception as e:
+            # Если пользователь заблокировал бота
+            blocked += 1
+            
+        # 🔥 Анти-спам задержка: 20 сообщений в секунду
+        time.sleep(0.05)
+        
+    conn.commit()
+    conn.close()
+    
+    # Отчет админу
+    report = (f"✅ **Рассылка завершена!**\n"
+              f"Успешно: {success}\n"
+              f"Заблокировали бота: {blocked}\n\n"
+              f"🗑 Чтобы удалить это сообщение у всех, напиши:\n"
+              f"`/delcast {broadcast_id}`")
+    bot.send_message(admin_id, report, parse_mode='Markdown')
+
+@bot.message_handler(commands=['delcast'])
+def cmd_delete_broadcast(message):
+    if message.from_user.id != ADMIN_ID: return
+    args = message.text.split()
+    if len(args) < 2:
+        bot.reply_to(message, "⚠️ Укажи ID рассылки. Пример: `/delcast a1b2c3d4`", parse_mode='Markdown')
+        return
+        
+    broadcast_id = args[1]
+    bot.reply_to(message, "⏳ Начинаю удаление сообщений...")
+    threading.Thread(target=run_delete_broadcast, args=(message.from_user.id, broadcast_id)).start()
+
+def run_delete_broadcast(admin_id, broadcast_id):
+    conn = sqlite3.connect('prod_database.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT user_id, message_id FROM broadcast_logs WHERE broadcast_id = ?', (broadcast_id,))
+    logs = cursor.fetchall()
+    
+    if not logs:
+        bot.send_message(admin_id, "❌ Рассылка с таким ID не найдена.")
+        conn.close()
+        return
+        
+    deleted = 0
+    for log in logs:
+        user_id, msg_id = log
+        try:
+            bot.delete_message(user_id, msg_id)
+            deleted += 1
+        except Exception:
+            pass # Игнорируем, если сообщение уже удалено пользователем или бот заблокирован
+            
+        time.sleep(0.05) # Задержка для API
+        
+    # Удаляем логи из базы
+    cursor.execute('DELETE FROM broadcast_logs WHERE broadcast_id = ?', (broadcast_id,))
+    conn.commit()
+    conn.close()
+    
+    bot.send_message(admin_id, f"🗑 **Удаление завершено.**\nУдалено сообщений: {deleted}", parse_mode='Markdown')
+
 # 🔥 ВРЕМЕННАЯ ФУНКЦИЯ ДЛЯ ВОССТАНОВЛЕНИЯ БАЗЫ
 @bot.message_handler(content_types=['document'])
 def restore_database(message):
@@ -222,110 +334,37 @@ def restore_database(message):
         except Exception as e:
             bot.reply_to(message, f"❌ Ошибка при загрузке: {e}")
 
-# 🔥 НОВОЕ: Команда статистики
-# 🔥 ОБНОВЛЕНО: Команда расширенной статистики
-
 @bot.message_handler(commands=['stats'])
-
 def stats_command(message):
-
     if message.from_user.id != ADMIN_ID: return
-
-    
-
     conn = sqlite3.connect('prod_database.db')
-
     cursor = conn.cursor()
-
-    
-
-    # Получаем текущие даты для сортировки
-
-    today = datetime.now().strftime("%Y-%m-%d")    # Например: 2023-11-20
-
-    this_month = datetime.now().strftime("%Y-%m")  # Например: 2023-11
-
-    
-
-    # 1. Всего юзеров
-
+    today = datetime.now().strftime("%Y-%m-%d")
+    this_month = datetime.now().strftime("%Y-%m")
     cursor.execute('SELECT COUNT(*) FROM users')
-
     total_users = cursor.fetchone()[0]
-
-    
-
-    # 2. Приход за сегодня (дата регистрации = сегодня)
-
     cursor.execute(f"SELECT COUNT(*) FROM users WHERE join_date LIKE '{today}%'")
-
     new_today = cursor.fetchone()[0]
-
-    
-
-    # 3. DAU: Активные сегодня (последняя активность = сегодня)
-
     cursor.execute(f"SELECT COUNT(*) FROM users WHERE last_active LIKE '{today}%'")
-
     dau = cursor.fetchone()[0]
-
-    
-
-    # 4. MAU: Активные за месяц (последняя активность = этот месяц)
-
     cursor.execute(f"SELECT COUNT(*) FROM users WHERE last_active LIKE '{this_month}%'")
-
     mau = cursor.fetchone()[0]
-
-    
-
-    # 5. ТОП-10 скачиваний
-
     cursor.execute('SELECT code, downloads FROM files ORDER BY downloads DESC LIMIT 10')
-
     top_files = cursor.fetchall()
-
-    
-
     conn.close()
-
     
-
-    # Собираем красивое сообщение
-
     text = f"📊 **Подробная статистика:**\n\n"
-
     text += f"👥 Всего пользователей: `{total_users}`\n"
-
     text += f"📈 Новых за сегодня: `{new_today}`\n"
-
     text += f"🔥 Активных сегодня (DAU): `{dau}`\n"
-
     text += f"📅 Активных в этом месяце (MAU): `{mau}`\n"
-
     text += f"➖➖➖➖➖➖➖\n"
-
     text += f"🏆 **Топ-10 скачиваний:**\n"
-
-    
-
     if not top_files:
-
         text += "Пока ничего не скачивали."
-
     else:
-
         for i, (code, count) in enumerate(top_files, 1):
-
             text += f"{i}. `{code}` — {count} раз\n"
-
-            
-
     bot.send_message(message.chat.id, text, parse_mode='Markdown')
 
-
-    
-    
-
 bot.infinity_polling()
-
