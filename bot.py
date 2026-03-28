@@ -33,6 +33,15 @@ app = Flask(__name__) # Инициализация веб-сервера Flask
 # Указывать обязательно с https:// и без слеша на конце!
 WEBHOOK_HOST = 'https://ТВОЙ-ДОМЕН.bothost.ru' 
 
+# Кешируем юзернейм бота, чтобы не делать лишних запросов при каждом /save
+BOT_USERNAME = None
+
+def get_bot_username():
+    global BOT_USERNAME
+    if not BOT_USERNAME:
+        BOT_USERNAME = bot.get_me().username
+    return BOT_USERNAME
+
 # Временные хранилища данных
 broadcast_data = {}
 post_drafts = {} # 🔥 Для хранения черновиков постов
@@ -176,40 +185,45 @@ def start_message(message):
 
 @bot.message_handler(commands=['save'])
 def save_file_command(message):
-    if message.from_user.id != ADMIN_ID: return
-    if not message.reply_to_message:
-        return bot.reply_to(message, "⚠️ Сделай Reply (Ответить) на файл и напиши команду с кодом.\nПример: `/save minecraft`", parse_mode='Markdown')
+    try:
+        if message.from_user.id != ADMIN_ID: return
+        if not message.reply_to_message:
+            return bot.reply_to(message, "⚠️ Сделай Reply (Ответить) на файл и напиши команду с кодом.\nПример: <code>/save minecraft</code>", parse_mode='HTML')
 
-    args = message.text.split()
-    if len(args) < 2:
-        return bot.reply_to(message, "⚠️ Укажи код для сохранения файла.\nПример: `/save minecraft`", parse_mode='Markdown')
+        args = message.text.split()
+        if len(args) < 2:
+            return bot.reply_to(message, "⚠️ Укажи код для сохранения файла.\nПример: <code>/save minecraft</code>", parse_mode='HTML')
 
-    code = args[1].lower()
-    target_msg = message.reply_to_message
-    file_id = None; file_type = None
+        code = args[1].lower()
+        target_msg = message.reply_to_message
+        file_id = None; file_type = None
 
-    if target_msg.document: file_id = target_msg.document.file_id; file_type = 'document'
-    elif target_msg.video: file_id = target_msg.video.file_id; file_type = 'video'
-    elif target_msg.photo: file_id = target_msg.photo[-1].file_id; file_type = 'photo'
-    elif target_msg.audio: file_id = target_msg.audio.file_id; file_type = 'audio'
-    
-    if file_id:
-        caption = "🗂 Держи свой файл!\nНе забудь поставить реакцию на канал 💙\n@AppVault7"
-        if add_file_to_db(code, file_id, file_type, caption):
-            link = f"https://t.me/{bot.get_me().username}?start={code}"
-            bot.reply_to(message, f"✅ **Файл успешно сохранен!**\n\n🆔 Код: `{code}`\n🔗 Ссылка для скачивания:\n{link}", parse_mode='Markdown')
+        if target_msg.document: file_id = target_msg.document.file_id; file_type = 'document'
+        elif target_msg.video: file_id = target_msg.video.file_id; file_type = 'video'
+        elif target_msg.photo: file_id = target_msg.photo[-1].file_id; file_type = 'photo'
+        elif target_msg.audio: file_id = target_msg.audio.file_id; file_type = 'audio'
+        
+        if file_id:
+            caption = "🗂 Держи свой файл!\nНе забудь поставить реакцию на канал 💙\n@AppVault7"
+            if add_file_to_db(code, file_id, file_type, caption):
+                bot_username = get_bot_username()
+                link = f"https://t.me/{bot_username}?start={code}"
+                bot.reply_to(message, f"✅ <b>Файл успешно сохранен!</b>\n\n🆔 Код: <code>{code}</code>\n🔗 Ссылка для скачивания:\n{link}", parse_mode='HTML')
+            else:
+                bot.reply_to(message, "❌ Ошибка базы данных при сохранении.")
         else:
-            bot.reply_to(message, "❌ Ошибка базы данных при сохранении.")
-    else:
-        bot.reply_to(message, "⚠️ Не удалось распознать файл в сообщении.")
+            bot.reply_to(message, "⚠️ Не удалось распознать файл в сообщении.")
+    except Exception as e:
+        # Если что-то пойдет не так, бот больше не будет молчать!
+        bot.reply_to(message, f"❌ <b>Системная ошибка:</b>\n<code>{e}</code>", parse_mode='HTML')
 
 @bot.message_handler(commands=['delete'])
 def delete_command(message):
     if message.from_user.id != ADMIN_ID: return
     args = message.text.split()
-    if len(args) < 2: return bot.reply_to(message, "⚠️ Укажи код файла для удаления.\nПример: `/delete minecraft`", parse_mode='Markdown')
+    if len(args) < 2: return bot.reply_to(message, "⚠️ Укажи код файла для удаления.\nПример: <code>/delete minecraft</code>", parse_mode='HTML')
     code = args[1]
-    if delete_file_from_db(code): bot.reply_to(message, f"🗑 Файл с кодом `{code}` успешно удален из базы!", parse_mode='Markdown')
+    if delete_file_from_db(code): bot.reply_to(message, f"🗑 Файл с кодом <code>{code}</code> успешно удален из базы!", parse_mode='HTML')
     else: bot.reply_to(message, "❌ Файл с таким кодом не найден.")
 
 # 🔥 БЛОК: РАССЫЛКА И УДАЛЕНИЕ СООБЩЕНИЙ 🔥
@@ -217,11 +231,11 @@ def delete_command(message):
 @bot.message_handler(commands=['broadcast'])
 def cmd_broadcast(message):
     if message.from_user.id != ADMIN_ID: return
-    msg = bot.send_message(message.chat.id, "📢 **Создание рассылки**\n\nОтправь мне сообщение (текст, фото, кружочек, медиагруппу), и я разошлю его всем пользователям бота.\nВсе форматирования будут сохранены.", parse_mode='Markdown')
+    msg = bot.send_message(message.chat.id, "📢 <b>Создание рассылки</b>\n\nОтправь мне сообщение (текст, фото, кружочек, медиагруппу), и я разошлю его всем пользователям бота.\nВсе форматирования будут сохранены.", parse_mode='HTML')
     bot.register_next_step_handler(msg, process_broadcast_preview)
 
 def process_broadcast_preview(message):
-    bot.send_message(message.chat.id, "👀 **Предпросмотр рассылки:**\n*(Именно так пользователи увидят твое сообщение)*", parse_mode='Markdown')
+    bot.send_message(message.chat.id, "👀 <b>Предпросмотр рассылки:</b>\n<i>(Именно так пользователи увидят твое сообщение)</i>", parse_mode='HTML')
     bot.copy_message(message.chat.id, message.chat.id, message.message_id)
     broadcast_data[message.from_user.id] = {'message_id': message.message_id}
     
@@ -275,18 +289,18 @@ def run_broadcast(admin_id, message_id_to_copy, limit):
     conn.commit()
     conn.close()
     
-    report = (f"✅ **Рассылка завершена!**\nУспешно: {success}\nЗаблокировали бота: {blocked}\n\n"
-              f"🗑 Чтобы удалить это сообщение у всех, напиши:\n`/delcast {broadcast_id}`")
-    bot.send_message(admin_id, report, parse_mode='Markdown')
+    report = (f"✅ <b>Рассылка завершена!</b>\nУспешно: {success}\nЗаблокировали бота: {blocked}\n\n"
+              f"🗑 Чтобы удалить это сообщение у всех, напиши:\n<code>/delcast {broadcast_id}</code>")
+    bot.send_message(admin_id, report, parse_mode='HTML')
 
 @bot.message_handler(commands=['delcast'])
 def cmd_delete_broadcast(message):
     if message.from_user.id != ADMIN_ID: return
     args = message.text.split()
     if len(args) < 2:
-        return bot.reply_to(message, "⚠️ Укажи ID рассылки для удаления.\nПример: `/delcast a1b2c3d4`", parse_mode='Markdown')
+        return bot.reply_to(message, "⚠️ Укажи ID рассылки для удаления.\nПример: <code>/delcast a1b2c3d4</code>", parse_mode='HTML')
     broadcast_id = args[1]
-    bot.reply_to(message, f"⏳ Начинаю удаление сообщений рассылки `{broadcast_id}`...", parse_mode='Markdown')
+    bot.reply_to(message, f"⏳ Начинаю удаление сообщений рассылки <code>{broadcast_id}</code>...", parse_mode='HTML')
     threading.Thread(target=run_delete_broadcast, args=(message.from_user.id, broadcast_id)).start()
 
 def run_delete_broadcast(admin_id, broadcast_id):
@@ -315,9 +329,9 @@ def run_delete_broadcast(admin_id, broadcast_id):
         conn.commit()
     conn.close()
     
-    report = f"🗑 **Удаление завершено.**\nУдалено сообщений: {deleted} из {len(logs)}"
-    if deleted < len(logs) and first_error: report += f"\n\n⚠️ **Причина ошибки у некоторых юзеров:**\n`{first_error}`"
-    bot.send_message(admin_id, report, parse_mode='Markdown')
+    report = f"🗑 <b>Удаление завершено.</b>\nУдалено сообщений: {deleted} из {len(logs)}"
+    if deleted < len(logs) and first_error: report += f"\n\n⚠️ <b>Причина ошибки у некоторых юзеров:</b>\n<code>{first_error}</code>"
+    bot.send_message(admin_id, report, parse_mode='HTML')
 
 # 🔥 БЛОК: СОЗДАНИЕ И ОТЛОЖЕННАЯ ПУБЛИКАЦИЯ ПОСТОВ 🔥
 
@@ -325,30 +339,30 @@ def run_delete_broadcast(admin_id, broadcast_id):
 def cmd_add_channel(message):
     if message.from_user.id != ADMIN_ID: return
     args = message.text.split()
-    if len(args) < 2: return bot.reply_to(message, "⚠️ Укажи юзернейм канала для добавления.\nПример: `/addchannel @AppVault7`", parse_mode='Markdown')
+    if len(args) < 2: return bot.reply_to(message, "⚠️ Укажи юзернейм канала для добавления.\nПример: <code>/addchannel @AppVault7</code>", parse_mode='HTML')
     channel = args[1]
     if not channel.startswith('@'): channel = '@' + channel
-    if add_channel_db(channel): bot.reply_to(message, f"✅ Канал {channel} добавлен в базу.\n\n⚠️ **Важно:** Не забудь выдать боту права администратора в этом канале (право на публикацию сообщений)!")
-    else: bot.reply_to(message, "❌ Ошибка базы данных при добавлении канала.")
+    if add_channel_db(channel): bot.reply_to(message, f"✅ Канал {channel} добавлен в базу.\n\n⚠️ <b>Важно:</b> Не забудь выдать боту права администратора в этом канале (право на публикацию сообщений)!", parse_mode='HTML')
+    else: bot.reply_to(message, "❌ Ошибка БД при добавлении канала.")
 
 @bot.message_handler(commands=['delchannel'])
 def cmd_del_channel(message):
     if message.from_user.id != ADMIN_ID: return
     args = message.text.split()
-    if len(args) < 2: return bot.reply_to(message, "⚠️ Укажи юзернейм канала для удаления.\nПример: `/delchannel @AppVault7`", parse_mode='Markdown')
+    if len(args) < 2: return bot.reply_to(message, "⚠️ Укажи юзернейм канала для удаления.\nПример: <code>/delchannel @AppVault7</code>", parse_mode='HTML')
     channel = args[1] if args[1].startswith('@') else '@' + args[1]
     del_channel_db(channel)
-    bot.reply_to(message, f"🗑 Канал {channel} успешно удален из базы.")
+    bot.reply_to(message, f"🗑 Канал {channel} успешно удален из базы.", parse_mode='HTML')
 
 @bot.message_handler(commands=['post'])
 def cmd_post(message):
     if message.from_user.id != ADMIN_ID: return
     channels = get_channels_db()
-    if not channels: return bot.reply_to(message, "⚠️ Сперва добавь канал в базу с помощью команды:\n`/addchannel @твойканал`", parse_mode='Markdown')
+    if not channels: return bot.reply_to(message, "⚠️ Сперва добавь канал в базу с помощью команды:\n<code>/addchannel @твойканал</code>", parse_mode='HTML')
     
     markup = InlineKeyboardMarkup()
     for ch in channels: markup.add(InlineKeyboardButton(ch, callback_data=f"p_chan_{ch}"))
-    bot.send_message(message.chat.id, "📢 **Создание поста**\n\nВыбери канал для публикации из списка ниже:", reply_markup=markup, parse_mode='Markdown')
+    bot.send_message(message.chat.id, "📢 <b>Создание поста</b>\n\nВыбери канал для публикации из списка ниже:", reply_markup=markup, parse_mode='HTML')
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('p_chan_'))
 def post_channel_selected(call):
@@ -358,11 +372,11 @@ def post_channel_selected(call):
     post_drafts[admin_id] = {'channel': channel, 'message_id': None, 'buttons': None}
     
     instruction = (
-        f"📢 Ты выбрал канал: **{channel}**\n\n"
+        f"📢 Ты выбрал канал: <b>{channel}</b>\n\n"
         "Отправь боту сообщение, которое собираешься опубликовать.\n"
-        "*(Поддерживается любой формат: текст со скрытым текстом/спойлерами, фото, видео, кружочки и документы)*"
+        "<i>(Поддерживается любой формат: текст со скрытым текстом/спойлерами, фото, видео, кружочки и документы)</i>"
     )
-    bot.edit_message_text(instruction, call.message.chat.id, call.message.message_id, parse_mode='Markdown')
+    bot.edit_message_text(instruction, call.message.chat.id, call.message.message_id, parse_mode='HTML')
     bot.register_next_step_handler(call.message, process_post_content)
 
 def process_post_content(message):
@@ -379,7 +393,7 @@ def show_post_menu(admin_id, chat_id):
     markup.add(InlineKeyboardButton("👁 Предпросмотр", callback_data="post_preview"))
     markup.add(InlineKeyboardButton("✅ Опубликовать", callback_data="post_publish"), InlineKeyboardButton("📅 Отложить", callback_data="post_schedule"))
     markup.add(InlineKeyboardButton("❌ Отмена", callback_data="post_cancel"))
-    bot.send_message(chat_id, "⚙️ **Меню поста:**\nЧто делаем дальше?", reply_markup=markup, parse_mode='Markdown')
+    bot.send_message(chat_id, "⚙️ <b>Меню поста:</b>\nЧто делаем дальше?", reply_markup=markup, parse_mode='HTML')
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('post_'))
 def post_menu_callback(call):
@@ -396,25 +410,25 @@ def post_menu_callback(call):
         bot.edit_message_text("❌ Создание поста отменено.", call.message.chat.id, call.message.message_id)
     elif action == "post_add_btns":
         text = (
-            "🛠 **Настройка URL-кнопок**\n\n"
+            "🛠 <b>Настройка URL-кнопок</b>\n\n"
             "Отправь список кнопок в таком формате:\n"
-            "`Кнопка 1 - https://t.me/durov`\n\n"
-            "💡 **Полезные фишки:**\n"
-            "1️⃣ **Кнопки в ряд:** используй разделитель `|`\n"
-            "`Кнопка 1 - http://... | Кнопка 2 - http://...`\n\n"
-            "2️⃣ **Цветные кнопки (API 9.4):** добавь тег перед названием\n"
-            "🔵 `(primary)` — синяя (основная)\n"
-            "🟢 `(success)` — зеленая (успех/скачать)\n"
-            "🔴 `(danger)` — красная (удалить/отмена)\n\n"
-            "3️⃣ **Кастомные эмодзи:** просто вставь их в текст кнопки!\n\n"
-            "📝 **Пример идеальной кнопки:**\n"
-            "`(success) Скачать 📥 - https://t.me/durov`\n\n"
-            "❌ Напиши `0` (ноль), чтобы удалить все кнопки."
+            "<code>Кнопка 1 - https://t.me/durov</code>\n\n"
+            "💡 <b>Полезные фишки:</b>\n"
+            "1️⃣ <b>Кнопки в ряд:</b> используй разделитель <code>|</code>\n"
+            "<code>Кнопка 1 - http://... | Кнопка 2 - http://...</code>\n\n"
+            "2️⃣ <b>Цветные кнопки (API 9.4):</b> добавь тег перед названием\n"
+            "🔵 <code>(primary)</code> — синяя (основная)\n"
+            "🟢 <code>(success)</code> — зеленая (успех/скачать)\n"
+            "🔴 <code>(danger)</code> — красная (удалить/отмена)\n\n"
+            "3️⃣ <b>Кастомные эмодзи:</b> просто вставь их в текст кнопки!\n\n"
+            "📝 <b>Пример идеальной кнопки:</b>\n"
+            "<code>(success) Скачать 📥 - https://t.me/durov</code>\n\n"
+            "❌ Напиши <code>0</code> (ноль), чтобы удалить все кнопки."
         )
-        msg = bot.send_message(call.message.chat.id, text, parse_mode='Markdown')
+        msg = bot.send_message(call.message.chat.id, text, parse_mode='HTML')
         bot.register_next_step_handler(msg, process_post_buttons)
     elif action == "post_preview":
-        bot.send_message(call.message.chat.id, f"👀 **Предпросмотр поста для {draft['channel']}:**", parse_mode='Markdown')
+        bot.send_message(call.message.chat.id, f"👀 <b>Предпросмотр поста для {draft['channel']}:</b>", parse_mode='HTML')
         try:
             markup = modern_markup_from_json(draft['buttons'].to_json()) if draft['buttons'] else None
             bot.copy_message(call.message.chat.id, admin_id, draft['message_id'], reply_markup=markup)
@@ -425,18 +439,18 @@ def post_menu_callback(call):
         try:
             markup = modern_markup_from_json(draft['buttons'].to_json()) if draft['buttons'] else None
             bot.copy_message(draft['channel'], admin_id, draft['message_id'], reply_markup=markup)
-            bot.send_message(call.message.chat.id, f"✅ Сообщение успешно опубликовано в **{draft['channel']}**!", parse_mode='Markdown')
+            bot.send_message(call.message.chat.id, f"✅ Сообщение успешно опубликовано в <b>{draft['channel']}</b>!", parse_mode='HTML')
             post_drafts.pop(admin_id, None) 
-        except Exception as e: bot.send_message(call.message.chat.id, f"❌ Ошибка публикации.\nУбедись, что бот является администратором канала.\n\n`{e}`", parse_mode='Markdown')
+        except Exception as e: bot.send_message(call.message.chat.id, f"❌ Ошибка публикации.\nУбедись, что бот является администратором канала.\n\n<code>{e}</code>", parse_mode='HTML')
     elif action == "post_schedule":
         text = (
-            "⏳ **Отложенная публикация**\n\n"
-            "Отправь дату и время по **Московскому времени** (UTC+3).\n\n"
-            "Формат: `ДД.ММ.ГГГГ ЧЧ:ММ`\n"
-            "Пример: `25.12.2023 15:30`\n\n"
-            "❌ Напиши `0` (ноль), чтобы отменить и вернуться в меню."
+            "⏳ <b>Отложенная публикация</b>\n\n"
+            "Отправь дату и время по <b>Московскому времени</b> (UTC+3).\n\n"
+            "Формат: <code>ДД.ММ.ГГГГ ЧЧ:ММ</code>\n"
+            "Пример: <code>25.12.2023 15:30</code>\n\n"
+            "❌ Напиши <code>0</code> (ноль), чтобы отменить и вернуться в меню."
         )
-        msg = bot.send_message(call.message.chat.id, text, parse_mode='Markdown')
+        msg = bot.send_message(call.message.chat.id, text, parse_mode='HTML')
         bot.register_next_step_handler(msg, process_schedule_time)
 
 def process_post_buttons(message):
@@ -498,7 +512,7 @@ def process_schedule_time(message):
         publish_time = int(dt.replace(tzinfo=MSK).timestamp()) 
         
         if publish_time <= time.time():
-            msg = bot.send_message(message.chat.id, "❌ **Это время уже прошло!**\nПожалуйста, введи время в будущем (или напиши `0` для отмены):", parse_mode='Markdown')
+            msg = bot.send_message(message.chat.id, "❌ <b>Это время уже прошло!</b>\nПожалуйста, введи время в будущем (или напиши <code>0</code> для отмены):", parse_mode='HTML')
             return bot.register_next_step_handler(msg, process_schedule_time) 
             
         buttons_json = draft['buttons'].to_json() if draft['buttons'] else None
@@ -509,10 +523,10 @@ def process_schedule_time(message):
         conn.commit()
         conn.close()
         
-        bot.send_message(message.chat.id, f"✅ **Пост успешно отложен!**\nОн будет автоматически опубликован в **{draft['channel']}** ровно в `{message.text}` (по Москве).", parse_mode='Markdown')
+        bot.send_message(message.chat.id, f"✅ <b>Пост успешно отложен!</b>\nОн будет автоматически опубликован в <b>{draft['channel']}</b> ровно в <code>{message.text}</code> (по Москве).", parse_mode='HTML')
         post_drafts.pop(admin_id, None)
     except ValueError:
-        msg = bot.send_message(message.chat.id, "❌ **Неверный формат времени!**\nПожалуйста, используй строгий формат: `ДД.ММ.ГГГГ ЧЧ:ММ`\nПример: `25.12.2023 15:30`\n\nПопробуй еще раз (или напиши `0` для отмены):", parse_mode='Markdown')
+        msg = bot.send_message(message.chat.id, "❌ <b>Неверный формат времени!</b>\nПожалуйста, используй строгий формат: <code>ДД.ММ.ГГГГ ЧЧ:ММ</code>\nПример: <code>25.12.2023 15:30</code>\n\nПопробуй еще раз (или напиши <code>0</code> для отмены):", parse_mode='HTML')
         bot.register_next_step_handler(msg, process_schedule_time)
 
 def scheduler_loop():
@@ -528,7 +542,7 @@ def scheduler_loop():
                 markup = modern_markup_from_json(buttons_json)
                 try:
                     bot.copy_message(channel, admin_id, message_id, reply_markup=markup)
-                    bot.send_message(admin_id, f"✅ Отложенный пост автоматически опубликован в **{channel}**!", parse_mode='Markdown')
+                    bot.send_message(admin_id, f"✅ Отложенный пост автоматически опубликован в <b>{channel}</b>!", parse_mode='HTML')
                 except Exception as e: bot.send_message(admin_id, f"❌ Ошибка автоматической публикации поста в {channel}: {e}")
                 cursor.execute('DELETE FROM scheduled_posts WHERE id = ?', (post_id,))
             conn.commit()
@@ -571,18 +585,18 @@ def stats_command(message):
     conn.close()
     
     text = (
-        "📊 **Статистика бота:**\n\n"
-        f"👥 Всего пользователей: `{total_users}`\n"
-        f"📈 Новых за сегодня: `{new_today}`\n"
-        f"🔥 Активных сегодня (DAU): `{dau}`\n"
-        f"📅 Активных за месяц (MAU): `{mau}`\n\n"
-        "🏆 **Топ-10 файлов по скачиваниям:**\n"
+        "📊 <b>Статистика бота:</b>\n\n"
+        f"👥 Всего пользователей: <code>{total_users}</code>\n"
+        f"📈 Новых за сегодня: <code>{new_today}</code>\n"
+        f"🔥 Активных сегодня (DAU): <code>{dau}</code>\n"
+        f"📅 Активных за месяц (MAU): <code>{mau}</code>\n\n"
+        "🏆 <b>Топ-10 файлов по скачиваниям:</b>\n"
     )
     
     if not top_files: text += "Скачиваний пока нет."
     else:
-        for i, (code, count) in enumerate(top_files, 1): text += f"{i}. `{code}` — {count} раз\n"
-    bot.send_message(message.chat.id, text, parse_mode='Markdown')
+        for i, (code, count) in enumerate(top_files, 1): text += f"{i}. <code>{code}</code> — {count} раз\n"
+    bot.send_message(message.chat.id, text, parse_mode='HTML')
 
 def setup_bot_commands():
     try:
@@ -656,7 +670,7 @@ def webhook():
         return 'error', 403
 
 if __name__ == '__main__':
-    # Обязательно снимаем старый вебхук или поллинг перед запуском
+    # Обязательно снимаем старый вебхук перед запуском
     bot.remove_webhook()
     time.sleep(1)
     
