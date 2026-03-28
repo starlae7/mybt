@@ -10,6 +10,9 @@ from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, BotCommand, BotCommandScopeChat, BotCommandScopeDefault
 
+# 🔥 ИМПОРТЫ ДЛЯ WEBHOOK 🔥
+from flask import Flask, request
+
 # Копируем базу из GitHub-бэкапа только при самом первом запуске
 if not os.path.exists('prod_database.db') and os.path.exists('source.db'):
     shutil.copy('source.db', 'prod_database.db')
@@ -24,12 +27,17 @@ if not TOKEN:
     exit()
 
 bot = telebot.TeleBot(TOKEN)
+app = Flask(__name__) # Инициализация веб-сервера Flask
+
+# 🔥 ВАЖНО: Вставь сюда домен, который выдаст тебе хостинг! 🔥
+# Например: 'https://bot1234.bothost.ru'
+WEBHOOK_HOST = 'https://ТВОЙ-ДОМЕН.bothost.ru' 
 
 # Временные хранилища данных
 broadcast_data = {}
 post_drafts = {} # 🔥 Для хранения черновиков постов
 
-# 🔥 НОВЫЙ КЛАСС ДЛЯ ПОДДЕРЖКИ API 9.4 (Цвета и Кастомные Эмодзи в кнопках) 🔥
+# 🔥 КЛАСС ДЛЯ ПОДДЕРЖКИ ЦВЕТНЫХ КНОПОК И ЭМОДЗИ (API 9.4) 🔥
 class ModernInlineKeyboardButton(InlineKeyboardButton):
     def __init__(self, text, url=None, callback_data=None, style=None, icon_custom_emoji_id=None, **kwargs):
         super().__init__(text, url=url, callback_data=callback_data, **kwargs)
@@ -38,7 +46,6 @@ class ModernInlineKeyboardButton(InlineKeyboardButton):
 
     def to_dict(self):
         d = super().to_dict()
-        # Добавляем новые параметры в итоговый JSON для Telegram API
         if self.style: d['style'] = self.style
         if self.icon_custom_emoji_id: d['icon_custom_emoji_id'] = self.icon_custom_emoji_id
         return d
@@ -50,7 +57,6 @@ def modern_markup_from_json(json_str):
     for row in data.get('keyboard', data.get('inline_keyboard', [])):
         new_row = []
         for btn in row:
-            # Восстанавливаем кнопку с сохранением стиля и эмодзи
             new_row.append(ModernInlineKeyboardButton(**btn))
         markup.keyboard.append(new_row)
     return markup
@@ -60,44 +66,11 @@ def modern_markup_from_json(json_str):
 def init_db():
     conn = sqlite3.connect('prod_database.db')
     cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS files (
-            code TEXT PRIMARY KEY,
-            file_id TEXT,
-            file_type TEXT,
-            caption TEXT,
-            downloads INTEGER DEFAULT 0
-        )
-    ''')
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS users (
-            user_id INTEGER PRIMARY KEY,
-            join_date TEXT,
-            last_active TEXT
-        )
-    ''')
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS broadcast_logs (
-            broadcast_id TEXT,
-            user_id INTEGER,
-            message_id INTEGER
-        )
-    ''')
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS channels (
-            username TEXT PRIMARY KEY
-        )
-    ''')
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS scheduled_posts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            admin_id INTEGER,
-            channel TEXT,
-            message_id INTEGER,
-            buttons TEXT,
-            publish_time INTEGER
-        )
-    ''')
+    cursor.execute('''CREATE TABLE IF NOT EXISTS files (code TEXT PRIMARY KEY, file_id TEXT, file_type TEXT, caption TEXT, downloads INTEGER DEFAULT 0)''')
+    cursor.execute('''CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, join_date TEXT, last_active TEXT)''')
+    cursor.execute('''CREATE TABLE IF NOT EXISTS broadcast_logs (broadcast_id TEXT, user_id INTEGER, message_id INTEGER)''')
+    cursor.execute('''CREATE TABLE IF NOT EXISTS channels (username TEXT PRIMARY KEY)''')
+    cursor.execute('''CREATE TABLE IF NOT EXISTS scheduled_posts (id INTEGER PRIMARY KEY AUTOINCREMENT, admin_id INTEGER, channel TEXT, message_id INTEGER, buttons TEXT, publish_time INTEGER)''')
     conn.commit()
     conn.close()
 
@@ -124,13 +97,11 @@ def add_file_to_db(code, file_id, file_type, caption):
     try:
         conn = sqlite3.connect('prod_database.db')
         cursor = conn.cursor()
-        cursor.execute('INSERT OR REPLACE INTO files (code, file_id, file_type, caption, downloads) VALUES (?, ?, ?, ?, 0)', 
-                       (code, file_id, file_type, caption))
+        cursor.execute('INSERT OR REPLACE INTO files (code, file_id, file_type, caption, downloads) VALUES (?, ?, ?, ?, 0)', (code, file_id, file_type, caption))
         conn.commit()
         conn.close()
         return True
     except Exception as e:
-        print(f"Ошибка БД: {e}")
         return False
 
 def get_file_from_db(code):
@@ -150,7 +121,6 @@ def delete_file_from_db(code):
     conn.close()
     return deleted_count > 0
 
-# Функции для каналов
 def add_channel_db(username):
     try:
         conn = sqlite3.connect('prod_database.db')
@@ -208,13 +178,11 @@ def start_message(message):
 def save_file_command(message):
     if message.from_user.id != ADMIN_ID: return
     if not message.reply_to_message:
-        bot.reply_to(message, "⚠️ Сделай Reply на файл и напиши `/save код`", parse_mode='Markdown')
-        return
+        return bot.reply_to(message, "⚠️ Сделай Reply на файл и напиши `/save код`", parse_mode='Markdown')
 
     args = message.text.split()
     if len(args) < 2:
-        bot.reply_to(message, "⚠️ Укажи код. Пример: `/save minecraft`", parse_mode='Markdown')
-        return
+        return bot.reply_to(message, "⚠️ Укажи код. Пример: `/save minecraft`", parse_mode='Markdown')
 
     code = args[1].lower()
     target_msg = message.reply_to_message
@@ -239,14 +207,10 @@ def save_file_command(message):
 def delete_command(message):
     if message.from_user.id != ADMIN_ID: return
     args = message.text.split()
-    if len(args) < 2:
-        bot.reply_to(message, "⚠️ Укажи код.", parse_mode='Markdown'); return
+    if len(args) < 2: return bot.reply_to(message, "⚠️ Укажи код.", parse_mode='Markdown')
     code = args[1]
-    if delete_file_from_db(code):
-        bot.reply_to(message, f"🗑 Файл `{code}` удален!", parse_mode='Markdown')
-    else:
-        bot.reply_to(message, "❌ Файл не найден.")
-
+    if delete_file_from_db(code): bot.reply_to(message, f"🗑 Файл `{code}` удален!", parse_mode='Markdown')
+    else: bot.reply_to(message, "❌ Файл не найден.")
 
 # 🔥 БЛОК: РАССЫЛКА И УДАЛЕНИЕ СООБЩЕНИЙ 🔥
 
@@ -258,7 +222,6 @@ def cmd_broadcast(message):
 
 def process_broadcast_preview(message):
     bot.send_message(message.chat.id, "👀 **Предпросмотр сообщения:**", parse_mode='Markdown')
-    
     bot.copy_message(message.chat.id, message.chat.id, message.message_id)
     broadcast_data[message.from_user.id] = {'message_id': message.message_id}
     
@@ -286,8 +249,7 @@ def broadcast_callback(call):
 
 def process_broadcast_limit(message):
     if not message.text.isdigit():
-        bot.send_message(message.chat.id, "❌ Это не число. Рассылка отменена.")
-        return
+        return bot.send_message(message.chat.id, "❌ Это не число. Рассылка отменена.")
     limit = int(message.text)
     bot.send_message(message.chat.id, f"🚀 Начинаю рассылку для {limit} пользователей...")
     threading.Thread(target=run_broadcast, args=(message.from_user.id, broadcast_data[message.from_user.id]['message_id'], limit)).start()
@@ -305,8 +267,7 @@ def run_broadcast(admin_id, message_id_to_copy, limit):
         user_id = user[0]
         try:
             sent_msg = bot.copy_message(user_id, admin_id, message_id_to_copy)
-            cursor.execute('INSERT INTO broadcast_logs (broadcast_id, user_id, message_id) VALUES (?, ?, ?)', 
-                           (broadcast_id, user_id, sent_msg.message_id))
+            cursor.execute('INSERT INTO broadcast_logs (broadcast_id, user_id, message_id) VALUES (?, ?, ?)', (broadcast_id, user_id, sent_msg.message_id))
             success += 1
         except Exception: blocked += 1
         time.sleep(0.05)
@@ -323,8 +284,7 @@ def cmd_delete_broadcast(message):
     if message.from_user.id != ADMIN_ID: return
     args = message.text.split()
     if len(args) < 2:
-        bot.reply_to(message, "⚠️ Укажи ID рассылки. Пример: `/delcast a1b2c3d4`", parse_mode='Markdown')
-        return
+        return bot.reply_to(message, "⚠️ Укажи ID рассылки. Пример: `/delcast a1b2c3d4`", parse_mode='Markdown')
     broadcast_id = args[1]
     bot.reply_to(message, "⏳ Начинаю удаление сообщений...")
     threading.Thread(target=run_delete_broadcast, args=(message.from_user.id, broadcast_id)).start()
@@ -359,22 +319,17 @@ def run_delete_broadcast(admin_id, broadcast_id):
     if deleted < len(logs) and first_error: report += f"\n\n⚠️ **Причина ошибки:**\n`{first_error}`"
     bot.send_message(admin_id, report, parse_mode='Markdown')
 
-
 # 🔥 БЛОК: СОЗДАНИЕ И ОТЛОЖЕННАЯ ПУБЛИКАЦИЯ ПОСТОВ 🔥
 
 @bot.message_handler(commands=['addchannel'])
 def cmd_add_channel(message):
     if message.from_user.id != ADMIN_ID: return
     args = message.text.split()
-    if len(args) < 2:
-        bot.reply_to(message, "⚠️ Укажи юзернейм канала.\nПример: `/addchannel @AppVault7`", parse_mode='Markdown')
-        return
+    if len(args) < 2: return bot.reply_to(message, "⚠️ Укажи юзернейм канала.\nПример: `/addchannel @AppVault7`", parse_mode='Markdown')
     channel = args[1]
     if not channel.startswith('@'): channel = '@' + channel
-    if add_channel_db(channel):
-        bot.reply_to(message, f"✅ Канал {channel} добавлен в базу. Не забудь выдать боту права админа в канале!")
-    else:
-        bot.reply_to(message, "❌ Ошибка БД при добавлении.")
+    if add_channel_db(channel): bot.reply_to(message, f"✅ Канал {channel} добавлен в базу. Не забудь выдать боту права админа в канале!")
+    else: bot.reply_to(message, "❌ Ошибка БД при добавлении.")
 
 @bot.message_handler(commands=['delchannel'])
 def cmd_del_channel(message):
@@ -389,12 +344,10 @@ def cmd_del_channel(message):
 def cmd_post(message):
     if message.from_user.id != ADMIN_ID: return
     channels = get_channels_db()
-    if not channels:
-        return bot.reply_to(message, "⚠️ Сначала добавь канал командой `/addchannel @твойканал`", parse_mode='Markdown')
+    if not channels: return bot.reply_to(message, "⚠️ Сначала добавь канал командой `/addchannel @твойканал`", parse_mode='Markdown')
     
     markup = InlineKeyboardMarkup()
-    for ch in channels:
-        markup.add(InlineKeyboardButton(ch, callback_data=f"p_chan_{ch}"))
+    for ch in channels: markup.add(InlineKeyboardButton(ch, callback_data=f"p_chan_{ch}"))
     bot.send_message(message.chat.id, "Выбери канал для публикации:", reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('p_chan_'))
@@ -402,36 +355,24 @@ def post_channel_selected(call):
     admin_id = call.from_user.id
     if admin_id != ADMIN_ID: return
     channel = call.data.replace('p_chan_', '')
-    
     post_drafts[admin_id] = {'channel': channel, 'message_id': None, 'buttons': None}
-    
-    bot.edit_message_text(f"Ты выбрал канал **{channel}**.\n\nОтправь боту то, что собираешься опубликовать.", 
-                          call.message.chat.id, call.message.message_id, parse_mode='Markdown')
+    bot.edit_message_text(f"Ты выбрал канал **{channel}**.\n\nОтправь боту то, что собираешься опубликовать.", call.message.chat.id, call.message.message_id, parse_mode='Markdown')
     bot.register_next_step_handler(call.message, process_post_content)
 
 def process_post_content(message):
     admin_id = message.from_user.id
     if admin_id not in post_drafts: return
-    
-    # Берем оригинальное сообщение пользователя, 
-    # чтобы сохранить 100% исходного форматирования
     post_drafts[admin_id]['message_id'] = message.message_id
-        
     show_post_menu(admin_id, message.chat.id)
 
 def show_post_menu(admin_id, chat_id):
     draft = post_drafts.get(admin_id)
     if not draft: return
-    
     markup = InlineKeyboardMarkup()
     markup.add(InlineKeyboardButton("🔗 Урл-кнопки", callback_data="post_add_btns"))
     markup.add(InlineKeyboardButton("👁 Предпросмотр", callback_data="post_preview"))
-    markup.add(
-        InlineKeyboardButton("✅ Опубликовать", callback_data="post_publish"),
-        InlineKeyboardButton("📅 Отложить", callback_data="post_schedule")
-    )
+    markup.add(InlineKeyboardButton("✅ Опубликовать", callback_data="post_publish"), InlineKeyboardButton("📅 Отложить", callback_data="post_schedule"))
     markup.add(InlineKeyboardButton("❌ Отмена", callback_data="post_cancel"))
-    
     bot.send_message(chat_id, "⚙️ **Меню поста:**\nЧто делаем дальше?", reply_markup=markup, parse_mode='Markdown')
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('post_'))
@@ -439,37 +380,25 @@ def post_menu_callback(call):
     admin_id = call.from_user.id
     if admin_id != ADMIN_ID: return
     bot.answer_callback_query(call.id)
-    
     action = call.data
     draft = post_drafts.get(admin_id)
-    if not draft and action != 'post_cancel': 
-        return bot.send_message(call.message.chat.id, "❌ Черновик не найден.")
+    
+    if not draft and action != 'post_cancel': return bot.send_message(call.message.chat.id, "❌ Черновик не найден.")
 
     if action == "post_cancel":
         post_drafts.pop(admin_id, None)
         bot.edit_message_text("❌ Создание поста отменено.", call.message.chat.id, call.message.message_id)
-        
     elif action == "post_add_btns":
-        text = ("Отправь список URL-кнопок в следующем формате:\n\n"
-                "`Кнопка 1 - http://t.me/durov`\n\n"
-                "🎨 **Цвета и Премиум-эмодзи (API 9.4!)**\n"
-                "• Просто вставь кастомный эмодзи в текст кнопки!\n"
-                "• Для цвета напиши `(primary)`, `(danger)` или `(success)` в начале:\n"
-                "`(success) 🌟 Скачать - https://...`\n\n"
-                "Для кнопок в один ряд используй разделитель `|`.\n"
-                "Напиши `0`, чтобы удалить кнопки.")
+        text = ("Отправь список URL-кнопок:\n`Кнопка 1 - http://t.me/durov`\n\nДля цвета: `(success) Скачать - https://...`\nНапиши `0`, чтобы удалить кнопки.")
         msg = bot.send_message(call.message.chat.id, text, parse_mode='Markdown')
         bot.register_next_step_handler(msg, process_post_buttons)
-
     elif action == "post_preview":
         bot.send_message(call.message.chat.id, f"👀 **Предпросмотр для {draft['channel']}:**", parse_mode='Markdown')
         try:
             markup = modern_markup_from_json(draft['buttons'].to_json()) if draft['buttons'] else None
             bot.copy_message(call.message.chat.id, admin_id, draft['message_id'], reply_markup=markup)
-        except Exception as e:
-            bot.send_message(call.message.chat.id, f"❌ Ошибка предпросмотра: {e}")
+        except Exception as e: bot.send_message(call.message.chat.id, f"❌ Ошибка предпросмотра: {e}")
         show_post_menu(admin_id, call.message.chat.id)
-        
     elif action == "post_publish":
         bot.edit_message_text("🚀 Публикую...", call.message.chat.id, call.message.message_id)
         try:
@@ -477,31 +406,21 @@ def post_menu_callback(call):
             bot.copy_message(draft['channel'], admin_id, draft['message_id'], reply_markup=markup)
             bot.send_message(call.message.chat.id, f"✅ Сообщение успешно опубликовано в **{draft['channel']}**!", parse_mode='Markdown')
             post_drafts.pop(admin_id, None) 
-        except Exception as e:
-            bot.send_message(call.message.chat.id, f"❌ Ошибка публикации. Проверь права бота в канале.\n`{e}`", parse_mode='Markdown')
-            
+        except Exception as e: bot.send_message(call.message.chat.id, f"❌ Ошибка публикации.\n`{e}`", parse_mode='Markdown')
     elif action == "post_schedule":
-        text = ("⏳ Отправь дату и время публикации (по **Москве**!)\n"
-                "Формат: `ДД.ММ.ГГГГ ЧЧ:ММ`\n"
-                "Например: `25.12.2023 15:30`\n\n"
-                "Напиши `0` или `отмена`, чтобы вернуться назад.")
-        msg = bot.send_message(call.message.chat.id, text, parse_mode='Markdown')
+        msg = bot.send_message(call.message.chat.id, "⏳ Отправь дату и время (по **Москве**!)\nФормат: `ДД.ММ.ГГГГ ЧЧ:ММ`\nНапиши `0` для отмены.", parse_mode='Markdown')
         bot.register_next_step_handler(msg, process_schedule_time)
 
-
-# 🔥 УЛУЧШЕННАЯ ОБРАБОТКА КНОПОК И ЦВЕТОВ 🔥
 def process_post_buttons(message):
     admin_id = message.from_user.id
     if admin_id not in post_drafts: return
     
-    text_lower = message.text.lower().strip()
-    if text_lower == '0' or text_lower == 'отмена':
+    if message.text.lower().strip() in ['0', 'отмена']:
         post_drafts[admin_id]['buttons'] = None
         bot.send_message(message.chat.id, "🗑 Кнопки удалены.")
         show_post_menu(admin_id, message.chat.id)
         return
 
-    # Собираем все премиум-эмодзи из сообщения
     custom_emojis = {}
     if message.entities:
         for ent in message.entities:
@@ -511,136 +430,85 @@ def process_post_buttons(message):
 
     markup = InlineKeyboardMarkup()
     try:
-        lines = message.text.split('\n')
-        for line in lines:
+        for line in message.text.split('\n'):
             if not line.strip(): continue
-            buttons_data = line.split('|')
             row = []
-            for btn in buttons_data:
+            for btn in line.split('|'):
                 parts = btn.split('-', 1)
                 if len(parts) == 2:
-                    btn_text = parts[0].strip()
-                    btn_url = parts[1].strip()
-                    
-                    # Парсим цвета (style)
+                    btn_text, btn_url = parts[0].strip(), parts[1].strip()
                     btn_style = None
-                    lower_btn_text = btn_text.lower()
-                    if lower_btn_text.startswith('(primary)'):
-                        btn_style = 'primary'
-                        btn_text = btn_text[9:].strip()
-                    elif lower_btn_text.startswith('(danger)'):
-                        btn_style = 'danger'
-                        btn_text = btn_text[8:].strip()
-                    elif lower_btn_text.startswith('(success)'):
-                        btn_style = 'success'
-                        btn_text = btn_text[9:].strip()
-                        
-                    # Парсим эмодзи (custom_emoji_id)
+                    if btn_text.lower().startswith('(primary)'): btn_style = 'primary'; btn_text = btn_text[9:].strip()
+                    elif btn_text.lower().startswith('(danger)'): btn_style = 'danger'; btn_text = btn_text[8:].strip()
+                    elif btn_text.lower().startswith('(success)'): btn_style = 'success'; btn_text = btn_text[9:].strip()
+                    
                     btn_emoji_id = None
                     for emo_txt, emo_id in custom_emojis.items():
                         if emo_txt in btn_text:
                             btn_emoji_id = emo_id
-                            # Удаляем эмодзи из текста, чтобы Telegram не дублировал его
                             btn_text = btn_text.replace(emo_txt, '', 1).strip()
                             break
 
-                    row.append(ModernInlineKeyboardButton(
-                        text=btn_text, 
-                        url=btn_url,
-                        style=btn_style,
-                        icon_custom_emoji_id=btn_emoji_id
-                    ))
+                    row.append(ModernInlineKeyboardButton(text=btn_text, url=btn_url, style=btn_style, icon_custom_emoji_id=btn_emoji_id))
             if row: markup.add(*row)
             
         post_drafts[admin_id]['buttons'] = markup
         bot.send_message(message.chat.id, "✅ Клавиатура сохранена!")
-    except Exception as e:
-        bot.send_message(message.chat.id, f"❌ Ошибка форматирования кнопок: {e}")
-        
+    except Exception as e: bot.send_message(message.chat.id, f"❌ Ошибка: {e}")
     show_post_menu(admin_id, message.chat.id)
 
-# 🔥 УЛУЧШЕННОЕ СОЗДАНИЕ ВРЕМЕНИ С УЧЕТОМ UX И ЧАСОВОГО ПОЯСА 🔥
 def process_schedule_time(message):
     admin_id = message.from_user.id
     draft = post_drafts.get(admin_id)
     if not draft: return
-    
-    text_lower = message.text.lower().strip()
-    if text_lower in ['0', 'отмена', 'cancel']:
-        show_post_menu(admin_id, message.chat.id)
-        return
+    if message.text.lower().strip() in ['0', 'отмена', 'cancel']:
+        return show_post_menu(admin_id, message.chat.id)
         
     try:
-        # Парсим время
         dt = datetime.strptime(message.text.strip(), "%d.%m.%Y %H:%M")
-        
-        # Привязываем введенное время к Москве (MSK = UTC+3)
         MSK = timezone(timedelta(hours=3))
-        dt_msk = dt.replace(tzinfo=MSK)
-        publish_time = int(dt_msk.timestamp()) # Абсолютное время в секундах, независимое от хостинга
+        publish_time = int(dt.replace(tzinfo=MSK).timestamp()) 
         
-        # Проверка, не в прошлом ли время
         if publish_time <= time.time():
-            msg = bot.send_message(message.chat.id, "❌ Это время уже прошло!\nВведи время в будущем (или напиши `0` для отмены):", parse_mode='Markdown')
-            bot.register_next_step_handler(msg, process_schedule_time) # Возвращаем пользователя на ввод времени
-            return
+            msg = bot.send_message(message.chat.id, "❌ Это время уже прошло!\nВведи время в будущем (или напиши `0`):", parse_mode='Markdown')
+            return bot.register_next_step_handler(msg, process_schedule_time) 
             
-        # Конвертируем кнопки в JSON-строку для БД
         buttons_json = draft['buttons'].to_json() if draft['buttons'] else None
-        
-        # Сохраняем в базу данных
         conn = sqlite3.connect('prod_database.db')
         cursor = conn.cursor()
-        cursor.execute('''INSERT INTO scheduled_posts (admin_id, channel, message_id, buttons, publish_time)
-                          VALUES (?, ?, ?, ?, ?)''', 
+        cursor.execute('''INSERT INTO scheduled_posts (admin_id, channel, message_id, buttons, publish_time) VALUES (?, ?, ?, ?, ?)''', 
                        (admin_id, draft['channel'], draft['message_id'], buttons_json, publish_time))
         conn.commit()
         conn.close()
         
-        bot.send_message(message.chat.id, f"✅ Пост успешно отложен!\nОн автоматически выйдет в **{draft['channel']}** в {message.text} (по Москве).", parse_mode='Markdown')
-        post_drafts.pop(admin_id, None) # Очищаем черновик
-        
+        bot.send_message(message.chat.id, f"✅ Пост отложен на {message.text} (по Москве).", parse_mode='Markdown')
+        post_drafts.pop(admin_id, None)
     except ValueError:
-        msg = bot.send_message(message.chat.id, "❌ Неверный формат даты и времени.\nПример правильного ввода: `25.12.2023 15:30`\nПопробуй еще раз (или напиши `0` для отмены):", parse_mode='Markdown')
+        msg = bot.send_message(message.chat.id, "❌ Неверный формат.\nПример: `25.12.2023 15:30`\nПопробуй еще раз (или `0`):", parse_mode='Markdown')
         bot.register_next_step_handler(msg, process_schedule_time)
 
-# 🔥 ФОНОВЫЙ ПЛАНИРОВЩИК (Проверяет время каждую минуту) 🔥
 def scheduler_loop():
     while True:
         try:
             conn = sqlite3.connect('prod_database.db')
             cursor = conn.cursor()
             current_time = int(time.time())
-            
-            # Ищем посты, время которых уже наступило
             cursor.execute('SELECT id, admin_id, channel, message_id, buttons FROM scheduled_posts WHERE publish_time <= ?', (current_time,))
             posts = cursor.fetchall()
-            
             for post in posts:
                 post_id, admin_id, channel, message_id, buttons_json = post
-                
-                # Восстанавливаем кнопки из JSON
                 markup = modern_markup_from_json(buttons_json)
-                
                 try:
                     bot.copy_message(channel, admin_id, message_id, reply_markup=markup)
-                    bot.send_message(admin_id, f"✅ Отложенный пост успешно опубликован в **{channel}**!", parse_mode='Markdown')
-                except Exception as e:
-                    bot.send_message(admin_id, f"❌ Ошибка публикации отложенного поста в {channel}: {e}")
-                    
-                # Удаляем пост из базы после попытки публикации
+                    bot.send_message(admin_id, f"✅ Отложенный пост опубликован в **{channel}**!", parse_mode='Markdown')
+                except Exception as e: bot.send_message(admin_id, f"❌ Ошибка публикации отложенного поста: {e}")
                 cursor.execute('DELETE FROM scheduled_posts WHERE id = ?', (post_id,))
-                
             conn.commit()
             conn.close()
-        except Exception as e:
-            print(f"Ошибка в планировщике: {e}")
-            
-        time.sleep(30) # Проверяем каждые 30 секунд
+        except Exception: pass
+        time.sleep(30)
 
-# Запускаем планировщик в фоновом режиме перед стартом бота
 threading.Thread(target=scheduler_loop, daemon=True).start()
-
 
 # 🔥 ВРЕМЕННАЯ ФУНКЦИЯ ДЛЯ ВОССТАНОВЛЕНИЯ БАЗЫ
 @bot.message_handler(content_types=['document'])
@@ -651,11 +519,9 @@ def restore_database(message):
         try:
             file_info = bot.get_file(message.document.file_id)
             downloaded_file = bot.download_file(file_info.file_path)
-            with open('prod_database.db', 'wb') as new_file:
-                new_file.write(downloaded_file)
-            bot.reply_to(message, "✅ База данных успешно восстановлена! Старые данные подгружены.")
-        except Exception as e:
-            bot.reply_to(message, f"❌ Ошибка при загрузке: {e}")
+            with open('prod_database.db', 'wb') as new_file: new_file.write(downloaded_file)
+            bot.reply_to(message, "✅ База данных успешно восстановлена!")
+        except Exception as e: bot.reply_to(message, f"❌ Ошибка: {e}")
 
 @bot.message_handler(commands=['stats'])
 def stats_command(message):
@@ -676,48 +542,53 @@ def stats_command(message):
     top_files = cursor.fetchall()
     conn.close()
     
-    text = f"📊 **Подробная статистика:**\n\n"
-    text += f"👥 Всего пользователей: `{total_users}`\n"
-    text += f"📈 Новых за сегодня: `{new_today}`\n"
-    text += f"🔥 Активных сегодня (DAU): `{dau}`\n"
-    text += f"📅 Активных в этом месяце (MAU): `{mau}`\n"
-    text += f"➖➖➖➖➖➖➖\n"
-    text += f"🏆 **Топ-10 скачиваний:**\n"
-    if not top_files: text += "Пока ничего не скачивали."
+    text = f"📊 **Статистика:**\n👥 Всего: `{total_users}`\n📈 Новых за сегодня: `{new_today}`\n🔥 DAU: `{dau}`\n📅 MAU: `{mau}`\n\n🏆 **Топ-10:**\n"
+    if not top_files: text += "Пусто."
     else:
-        for i, (code, count) in enumerate(top_files, 1):
-            text += f"{i}. `{code}` — {count} раз\n"
+        for i, (code, count) in enumerate(top_files, 1): text += f"{i}. `{code}` — {count} раз\n"
     bot.send_message(message.chat.id, text, parse_mode='Markdown')
 
-
-# 🔥 УСТАНОВКА КОМАНД МЕНЮ (Админские / Обычные) 🔥
 def setup_bot_commands():
     try:
-        # 1. Меню для обычных пользователей
-        bot.set_my_commands(
-            [BotCommand("/start", "Запустить бота")],
-            scope=BotCommandScopeDefault()
-        )
-        # 2. Меню ТОЛЬКО для админа
+        bot.set_my_commands([BotCommand("/start", "Запустить бота")], scope=BotCommandScopeDefault())
         admin_commands = [
-            BotCommand("/start", "Запустить бота"),
-            BotCommand("/post", "Создать пост в канал"),
-            BotCommand("/broadcast", "Сделать рассылку"),
-            BotCommand("/stats", "Статистика бота"),
-            BotCommand("/save", "Сохранить файл"),
-            BotCommand("/delete", "Удалить файл"),
-            BotCommand("/addchannel", "Добавить канал"),
-            BotCommand("/delchannel", "Удалить канал")
+            BotCommand("/start", "Запустить бота"), BotCommand("/post", "Создать пост в канал"),
+            BotCommand("/broadcast", "Сделать рассылку"), BotCommand("/stats", "Статистика бота"),
+            BotCommand("/save", "Сохранить файл"), BotCommand("/delete", "Удалить файл"),
+            BotCommand("/addchannel", "Добавить канал"), BotCommand("/delchannel", "Удалить канал")
         ]
-        bot.set_my_commands(
-            admin_commands,
-            scope=BotCommandScopeChat(chat_id=ADMIN_ID)
-        )
-        print("✅ Команды меню успешно установлены!")
-    except Exception as e:
-        print(f"❌ Ошибка установки команд: {e}")
+        bot.set_my_commands(admin_commands, scope=BotCommandScopeChat(chat_id=ADMIN_ID))
+    except Exception: pass
 
-# Вызываем установку меню перед запуском
 setup_bot_commands()
 
-bot.infinity_polling()
+# 🔥 НАСТРОЙКИ ДЛЯ РЕЖИМА WEBHOOK 🔥
+
+# Маршрут для проверки, что сервер Flask работает
+@app.route('/', methods=['GET', 'HEAD'])
+def index():
+    return 'Бот работает в режиме Webhook!'
+
+# Маршрут, куда Telegram будет присылать обновления
+@app.route(f'/{TOKEN}/', methods=['POST'])
+def webhook():
+    if request.headers.get('content-type') == 'application/json':
+        json_string = request.get_data().decode('utf-8')
+        update = telebot.types.Update.de_json(json_string)
+        bot.process_new_updates([update])
+        return ''
+    else:
+        return 'error', 403
+
+if __name__ == '__main__':
+    # Обязательно снимаем старый вебхук или поллинг перед запуском
+    bot.remove_webhook()
+    time.sleep(1)
+    
+    # Устанавливаем новый Webhook с твоим доменом
+    webhook_url = f"{WEBHOOK_HOST}/{TOKEN}/"
+    bot.set_webhook(url=webhook_url)
+    
+    # Запускаем Flask-сервер. Хостинг сам передаст нужный порт через OS ENV
+    port = int(os.environ.get('PORT', 8080))
+    app.run(host='0.0.0.0', port=port)
