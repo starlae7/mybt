@@ -30,7 +30,7 @@ bot = telebot.TeleBot(TOKEN)
 app = Flask(__name__) # Инициализация веб-сервера Flask
 
 # 🔥 ВАЖНО: Вставь сюда домен, который выдаст тебе хостинг! 🔥
-# Например: 'https://bot1234.bothost.ru'
+# Указывать обязательно с https:// и без слеша на конце!
 WEBHOOK_HOST = 'https://ТВОЙ-ДОМЕН.bothost.ru' 
 
 # Временные хранилища данных
@@ -589,6 +589,7 @@ if __name__ == '__main__':
     webhook_url = f"{WEBHOOK_HOST}/{TOKEN}/"
     bot.set_webhook(url=webhook_url)
     
-    # Запускаем Flask-сервер. Хостинг сам передаст нужный порт через OS ENV
-    port = int(os.environ.get('PORT', 8080))
+    # Запускаем Flask-сервер.
+    # ВАЖНО: Порт установлен на 3000, как по умолчанию в Bothost
+    port = int(os.environ.get('PORT', 3000))
     app.run(host='0.0.0.0', port=port)
