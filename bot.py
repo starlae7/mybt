@@ -31,7 +31,7 @@ app = Flask(__name__) # Инициализация веб-сервера Flask
 
 # 🔥 ВАЖНО: Вставь сюда домен, который выдаст тебе хостинг! 🔥
 # Указывать обязательно с https:// и без слеша на конце!
-WEBHOOK_HOST = 'https://ТВОЙ-ДОМЕН.bothost.ru' 
+WEBHOOK_HOST = 'https://appvault.bothost.ru' 
 
 # Временные хранилища данных
 broadcast_data = {}
