@@ -23,14 +23,13 @@ TOKEN = os.getenv('BOT_TOKEN')
 ADMIN_ID = 1014329713 # <--- ТВОЙ ID
 
 if not TOKEN:
-    print("Ошибка: Токен не найден! Проверь файл .env")
+    print("Ошибка: Токен не найден! Проверь файл .env или переменные окружения на хостинге.")
     exit()
 
 bot = telebot.TeleBot(TOKEN)
 app = Flask(__name__) # Инициализация веб-сервера Flask
 
-# 🔥 ВАЖНО: Вставь сюда домен, который выдаст тебе хостинг! 🔥
-# Указывать обязательно с https:// и без слеша на конце!
+# 🔥 Твой домен с Bothost 🔥
 WEBHOOK_HOST = 'https://appvault.bothost.ru' 
 
 # Временные хранилища данных
@@ -569,6 +568,18 @@ setup_bot_commands()
 def index():
     return 'Бот работает в режиме Webhook!'
 
+# Маршрут для РУЧНОЙ установки вебхука
+@app.route('/set_webhook', methods=['GET'])
+def set_webhook():
+    bot.remove_webhook()
+    time.sleep(1)
+    webhook_url = f"{WEBHOOK_HOST}/{TOKEN}/"
+    success = bot.set_webhook(url=webhook_url)
+    if success:
+        return f"✅ Webhook успешно установлен на: {webhook_url}"
+    else:
+        return "❌ Ошибка установки Webhook!"
+
 # Маршрут, куда Telegram будет присылать обновления
 @app.route(f'/{TOKEN}/', methods=['POST'])
 def webhook():
@@ -581,15 +592,6 @@ def webhook():
         return 'error', 403
 
 if __name__ == '__main__':
-    # Обязательно снимаем старый вебхук или поллинг перед запуском
-    bot.remove_webhook()
-    time.sleep(1)
-    
-    # Устанавливаем новый Webhook с твоим доменом
-    webhook_url = f"{WEBHOOK_HOST}/{TOKEN}/"
-    bot.set_webhook(url=webhook_url)
-    
     # Запускаем Flask-сервер.
-    # ВАЖНО: Порт установлен на 3000, как по умолчанию в Bothost
     port = int(os.environ.get('PORT', 3000))
     app.run(host='0.0.0.0', port=port)
