@@ -258,6 +258,7 @@ def cmd_broadcast(message):
 
 def process_broadcast_preview(message):
     bot.send_message(message.chat.id, "👀 **Предпросмотр сообщения:**", parse_mode='Markdown')
+    
     bot.copy_message(message.chat.id, message.chat.id, message.message_id)
     broadcast_data[message.from_user.id] = {'message_id': message.message_id}
     
@@ -412,7 +413,10 @@ def process_post_content(message):
     admin_id = message.from_user.id
     if admin_id not in post_drafts: return
     
+    # Берем оригинальное сообщение пользователя, 
+    # чтобы сохранить 100% исходного форматирования
     post_drafts[admin_id]['message_id'] = message.message_id
+        
     show_post_menu(admin_id, message.chat.id)
 
 def show_post_menu(admin_id, chat_id):
