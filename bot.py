@@ -573,7 +573,7 @@ def index():
 def set_webhook():
     bot.remove_webhook()
     time.sleep(1)
-    webhook_url = f"{WEBHOOK_HOST}/{TOKEN}/"
+    webhook_url = f"{WEBHOOK_HOST}/{TOKEN}" # Без слэша!
     success = bot.set_webhook(url=webhook_url)
     if success:
         return f"✅ Webhook успешно установлен на: {webhook_url}"
@@ -581,7 +581,7 @@ def set_webhook():
         return "❌ Ошибка установки Webhook!"
 
 # Маршрут, куда Telegram будет присылать обновления
-@app.route(f'/{TOKEN}/', methods=['POST'])
+@app.route(f'/{TOKEN}', methods=['POST']) # Без слэша!
 def webhook():
     if request.headers.get('content-type') == 'application/json':
         json_string = request.get_data().decode('utf-8')
@@ -592,6 +592,15 @@ def webhook():
         return 'error', 403
 
 if __name__ == '__main__':
+    # Обязательно снимаем старый вебхук или поллинг перед запуском
+    bot.remove_webhook()
+    time.sleep(1)
+    
+    # Устанавливаем новый Webhook с твоим доменом
+    webhook_url = f"{WEBHOOK_HOST}/{TOKEN}" # Без слэша!
+    bot.set_webhook(url=webhook_url)
+    
     # Запускаем Flask-сервер.
+    # ВАЖНО: Порт установлен на 3000, как по умолчанию в Bothost
     port = int(os.environ.get('PORT', 3000))
     app.run(host='0.0.0.0', port=port)
