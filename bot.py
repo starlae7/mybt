@@ -29,8 +29,9 @@ if not TOKEN:
 bot = telebot.TeleBot(TOKEN)
 app = Flask(__name__) # Инициализация веб-сервера Flask
 
-# 🔥 Твой домен с Bothost 🔥
-WEBHOOK_HOST = 'https://appvault.bothost.ru' 
+# 🔥 ВАЖНО: Вставь сюда АВТОМАТИЧЕСКИЙ домен, который выдаст тебе хостинг! 🔥
+# Указывать обязательно с https:// и без слеша на конце!
+WEBHOOK_HOST = 'https://ТВОЙ-ДОМЕН.bothost.ru' 
 
 # Временные хранилища данных
 broadcast_data = {}
@@ -355,7 +356,7 @@ def post_channel_selected(call):
     if admin_id != ADMIN_ID: return
     channel = call.data.replace('p_chan_', '')
     post_drafts[admin_id] = {'channel': channel, 'message_id': None, 'buttons': None}
-    bot.edit_message_text(f"Ты выбрал канал **{channel}**.\n\nОтправь боту то, что собираешься опубликовать.", call.message.chat.id, call.message.message_id, parse_mode='Markdown')
+    bot.edit_message_text(f"Ты выбрал канал **{channel}**.\n\nОтправ боту то, что собираешься опубликовать.", call.message.chat.id, call.message.message_id, parse_mode='Markdown')
     bot.register_next_step_handler(call.message, process_post_content)
 
 def process_post_content(message):
@@ -566,19 +567,46 @@ setup_bot_commands()
 # Маршрут для проверки, что сервер Flask работает
 @app.route('/', methods=['GET', 'HEAD'])
 def index():
-    return 'Бот работает в режиме Webhook!'
+    return '''
+    <html>
+        <head>
+            <title>Bot Webhook</title>
+            <meta charset="utf-8">
+        </head>
+        <body style="font-family: sans-serif; padding: 2rem; text-align: center; background-color: #f4f4f9;">
+            <h1 style="color: #4CAF50;">✅ Бот успешно запущен!</h1>
+            <p style="font-size: 18px;">Сервер Flask работает и готов принимать сообщения от Telegram.</p>
+            <br><br>
+            <a href="/set_webhook" style="padding: 15px 25px; background-color: #0088cc; color: white; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 18px;">🔗 Привязать Webhook Telegram</a>
+        </body>
+    </html>
+    '''
 
-# Маршрут для РУЧНОЙ установки вебхука
+# Маршрут для РУЧНОЙ установки вебхука (динамически берет правильный домен)
 @app.route('/set_webhook', methods=['GET'])
 def set_webhook():
     bot.remove_webhook()
     time.sleep(1)
-    webhook_url = f"{WEBHOOK_HOST}/{TOKEN}" # Без слэша!
+    
+    # Динамически получаем текущий домен, на который мы зашли (чтобы обойти ошибки в WEBHOOK_HOST)
+    host_url = request.host_url.rstrip('/')
+    webhook_url = f"{host_url}/{TOKEN}"
+    
     success = bot.set_webhook(url=webhook_url)
+    
     if success:
-        return f"✅ Webhook успешно установлен на: {webhook_url}"
+        return f'''
+        <body style="font-family: sans-serif; padding: 2rem; text-align: center; background-color: #f4f4f9;">
+            <h2 style="color:green;">✅ Webhook успешно установлен!</h2>
+            <p style="font-size: 18px;">Telegram теперь привязан к адресу:</p>
+            <p><b>{webhook_url}</b></p>
+            <br>
+            <p style="font-size: 18px;">Теперь просто напишите боту <b>/start</b> в Telegram!</p>
+        </body>
+        '''
     else:
-        return "❌ Ошибка установки Webhook!"
+        return '<h3 style="color:red; text-align:center;">❌ Ошибка установки Webhook! Проверьте правильность токена.</h3>'
+
 
 # Маршрут, куда Telegram будет присылать обновления
 @app.route(f'/{TOKEN}', methods=['POST']) # Без слэша!
@@ -596,11 +624,10 @@ if __name__ == '__main__':
     bot.remove_webhook()
     time.sleep(1)
     
-    # Устанавливаем новый Webhook с твоим доменом
-    webhook_url = f"{WEBHOOK_HOST}/{TOKEN}" # Без слэша!
+    # Пытаемся установить Webhook при старте
+    webhook_url = f"{WEBHOOK_HOST}/{TOKEN}" 
     bot.set_webhook(url=webhook_url)
     
     # Запускаем Flask-сервер.
-    # ВАЖНО: Порт установлен на 3000, как по умолчанию в Bothost
     port = int(os.environ.get('PORT', 3000))
     app.run(host='0.0.0.0', port=port)
